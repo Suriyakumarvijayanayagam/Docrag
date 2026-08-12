@@ -1,0 +1,12 @@
+[
+  {
+    "question": "what is the max voltage of the LM317",
+    "expected_keyword": "LM317",
+    "expected_source_file": "spec.pdf"
+  },
+  {
+    "question": "how does the cooling system work",
+    "expected_keyword": "heatsink",
+    "expected_source_file": "spec.pdf"
+  }
+]

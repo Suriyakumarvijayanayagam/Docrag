@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DocRAG Console</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js"></script>
+<style>
+  :root {
+    --void: #0A0F1A;
+    --panel: #121A2B;
+    --panel-raised: #17203380;
+    --grid: #1E2A42;
+    --amber: #FFB454;
+    --cyan: #6EE7DE;
+    --coral: #F87171;
+    --paper: #E8EDF5;
+    --steel: #8592A8;
+    --mono: 'IBM Plex Mono', 'Courier New', monospace;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+  }
+
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 32px 32px,
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 32px 32px,
+      var(--void);
+    background-attachment: fixed;
+    color: var(--paper);
+    font-family: var(--sans);
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: 280px 1fr 320px;
+    height: 100vh;
+  }
+
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 1fr; }
+    .rail, .inspector { display: none; }
+  }
+
+  /* ---- shared ---- */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--steel);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .eyebrow::before { content: '+'; color: var(--amber); font-weight: 600; }
+
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--paper);
+  }
+
+  input, textarea, button {
+    font-family: var(--sans);
+    color: var(--paper);
+  }
+
+  ::placeholder { color: var(--steel); opacity: 0.7; }
+
+  /* ---- left rail ---- */
+  .rail {
+    background: var(--panel);
+    border-right: 1px solid var(--grid);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    overflow-y: auto;
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .logo .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan);
+  }
+
+  .field label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--steel);
+    margin-bottom: 6px;
+  }
+  .field input {
+    width: 100%;
+    background: var(--void);
+    border: 1px solid var(--grid);
+    border-radius: 3px;
+    padding: 8px 10px;
+    font-size: 13px;
+    outline: none;
+  }
+  .field input:focus { border-color: var(--amber); }
+  .field { margin-bottom: 12px; }
+
+  .dropzone {
+    border: 1px dashed var(--grid);
+    border-radius: 4px;
+    padding: 20px 12px;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--steel);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--amber); color: var(--amber); }
+  .dropzone input { display: none; }
+
+  .doc-list { display: flex; flex-direction: column; gap: 8px; }
+  .doc-item {
+    background: var(--void);
+    border: 1px solid var(--grid);
+    border-radius: 3px;
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+  .doc-item .name { font-weight: 500; word-break: break-all; margin-bottom: 4px; }
+  .doc-item .meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--steel);
+    display: flex;
+    gap: 10px;
+  }
+  .doc-item .meta span.hit { color: var(--cyan); }
+
+  /* ---- center column ---- */
+  .center {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .stream {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .empty-state {
+    margin: auto;
+    text-align: center;
+    color: var(--steel);
+    font-family: var(--mono);
+    font-size: 12px;
+    max-width: 360px;
+  }
+  .empty-state .big {
+    font-size: 32px;
+    color: var(--grid);
+    margin-bottom: 16px;
+  }
+
+  .qa-block { max-width: 720px; }
+  .question {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--amber);
+    margin-bottom: 14px;
+    padding-left: 16px;
+    border-left: 2px solid var(--amber);
+  }
+
+  .answer-card {
+    background: var(--panel);
+    border: 1px solid var(--grid);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .answer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--grid);
+  }
+
+  .confidence {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--steel);
+  }
+  .signal-bars { display: flex; gap: 2px; align-items: flex-end; }
+  .signal-bars .bar {
+    width: 3px;
+    background: var(--grid);
+    border-radius: 1px;
+  }
+  .signal-bars .bar:nth-child(1) { height: 6px; }
+  .signal-bars .bar:nth-child(2) { height: 9px; }
+  .signal-bars .bar:nth-child(3) { height: 12px; }
+  .signal-bars .bar:nth-child(4) { height: 15px; }
+  .signal-bars .bar:nth-child(5) { height: 18px; }
+  .conf-high .bar { background: var(--cyan); box-shadow: 0 0 4px var(--cyan); }
+  .conf-medium .bar:nth-child(-n+3) { background: var(--amber); box-shadow: 0 0 4px var(--amber); }
+  .conf-low .bar:nth-child(-n+1) { background: var(--coral); box-shadow: 0 0 4px var(--coral); }
+
+  .answer-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+
+  .answer-zone .zone-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .zone-label.docs { color: var(--cyan); }
+  .zone-label.docs::before { content: '▣'; }
+  .zone-label.insight { color: var(--amber); }
+  .zone-label.insight::before { content: '◇'; }
+  .answer-zone p { font-size: 14px; line-height: 1.6; color: var(--paper); white-space: pre-wrap; }
+
+  .answer-footer {
+    padding: 10px 16px;
+    border-top: 1px solid var(--grid);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .source-chip {
+    font-family: var(--mono);
+    font-size: 10px;
+    background: var(--void);
+    border: 1px solid var(--grid);
+    border-radius: 3px;
+    padding: 4px 8px;
+    color: var(--steel);
+    cursor: default;
+  }
+  .source-chip .loc { color: var(--paper); }
+  .source-chip.exact { border-color: var(--cyan); color: var(--cyan); }
+
+  .diagram-card img { width: 100%; display: block; border-top: 1px solid var(--grid); }
+  .diagram-card .caption {
+    padding: 10px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--steel);
+  }
+  .mermaid-wrap { padding: 16px; background: var(--void); }
+
+  .composer {
+    border-top: 1px solid var(--grid);
+    padding: 16px 40px 24px;
+    display: flex;
+    gap: 10px;
+    background: var(--panel);
+  }
+  .composer input {
+    flex: 1;
+    background: var(--void);
+    border: 1px solid var(--grid);
+    border-radius: 4px;
+    padding: 12px 14px;
+    font-size: 14px;
+    outline: none;
+  }
+  .composer input:focus { border-color: var(--amber); }
+  .composer button {
+    background: var(--amber);
+    color: var(--void);
+    border: none;
+    border-radius: 4px;
+    padding: 0 20px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: filter 0.15s;
+  }
+  .composer button:hover { filter: brightness(1.1); }
+  .composer button:disabled { background: var(--grid); color: var(--steel); cursor: not-allowed; }
+  .composer button.ghost {
+    background: transparent;
+    border: 1px solid var(--grid);
+    color: var(--steel);
+  }
+  .composer button.ghost:hover { border-color: var(--cyan); color: var(--cyan); filter: none; }
+
+  /* ---- right inspector ---- */
+  .inspector {
+    background: var(--panel);
+    border-left: 1px solid var(--grid);
+    padding: 20px;
+    overflow-y: auto;
+  }
+  .inspector-empty {
+    color: var(--steel);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.7;
+  }
+  .fact-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--grid);
+    font-size: 12px;
+  }
+  .fact-row .label { color: var(--steel); }
+  .fact-row .value { font-family: var(--mono); color: var(--cyan); }
+
+  .memory-entry {
+    font-size: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--grid);
+    color: var(--paper);
+    line-height: 1.5;
+  }
+  .memory-entry .tag {
+    font-family: var(--mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    color: var(--amber);
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--grid); border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- LEFT RAIL: config + upload + docs -->
+  <aside class="rail">
+    <div class="logo"><span class="dot"></span> DOCRAG CONSOLE</div>
+
+    <div>
+      <div class="eyebrow">Connection</div>
+      <div class="field">
+        <label>API base URL</label>
+        <input id="apiBase" value="http://localhost:8000" />
+      </div>
+      <div class="field">
+        <label>User ID</label>
+        <input id="userId" value="demoUser" />
+      </div>
+      <div class="field">
+        <label>Project ID</label>
+        <input id="projectId" value="powerProj" />
+      </div>
+    </div>
+
+    <div>
+      <div class="eyebrow">Ingest</div>
+      <label class="dropzone" id="dropzone">
+        Drop a PDF or DOCX<br>or click to browse
+        <input type="file" id="fileInput" accept=".pdf,.docx" />
+      </label>
+    </div>
+
+    <div style="flex:1; min-height:0; display:flex; flex-direction:column;">
+      <div class="eyebrow">Documents</div>
+      <div class="doc-list" id="docList" style="overflow-y:auto;">
+        <div class="inspector-empty">No documents yet.</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- CENTER: conversation -->
+  <main class="center">
+    <div class="stream" id="stream">
+      <div class="empty-state">
+        <div class="big">+</div>
+        Upload a document on the left, then ask a technical question below.
+        Answers separate what's in your documents from what the model adds.
+      </div>
+    </div>
+
+    <div class="composer">
+      <input id="questionInput" placeholder="Ask a question, or 'diagram: <what you want to see>'" />
+      <button class="ghost" id="askBtn">Ask</button>
+      <button id="streamBtn">Stream</button>
+    </div>
+  </main>
+
+  <!-- RIGHT: inspector -->
+  <aside class="inspector">
+    <div class="eyebrow">Inspector</div>
+    <div id="inspectorBody" class="inspector-empty">
+      Source locators and project memory appear here once you ask something.
+    </div>
+  </aside>
+
+</div>
+
+<script>
+mermaid.initialize({ startOnLoad: false, theme: 'dark', themeVariables: {
+  background: '#121A2B', primaryColor: '#17203380', primaryTextColor: '#E8EDF5',
+  primaryBorderColor: '#1E2A42', lineColor: '#6EE7DE', fontFamily: 'IBM Plex Mono'
+}});
+
+const $ = (id) => document.getElementById(id);
+const apiBase = () => $('apiBase').value.replace(/\/$/, '');
+const uid = () => $('userId').value.trim();
+const pid = () => $('projectId').value.trim();
+
+const stream = $('stream');
+const docList = $('docList');
+const inspectorBody = $('inspectorBody');
+let uploadedDocs = [];
+
+function clearEmptyState() {
+  const empty = stream.querySelector('.empty-state');
+  if (empty) empty.remove();
+}
+
+function renderDocList() {
+  if (uploadedDocs.length === 0) {
+    docList.innerHTML = '<div class="inspector-empty">No documents yet.</div>';
+    return;
+  }
+  docList.innerHTML = uploadedDocs.map(d => `
+    <div class="doc-item">
+      <div class="name">${d.filename}</div>
+      <div class="meta">
+        <span>${d.chunk_count} chunks</span>
+        <span class="${d.structured_fact_count > 0 ? 'hit' : ''}">${d.structured_fact_count} facts</span>
+        <span class="${d.figure_count > 0 ? 'hit' : ''}">${d.figure_count} figures</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function uploadFile(file) {
+  const form = new FormData();
+  form.append('user_id', uid());
+  form.append('project_id', pid());
+  form.append('file', file);
+  try {
+    const res = await fetch(`${apiBase()}/documents/upload`, { method: 'POST', body: form });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    uploadedDocs.push(data);
+    renderDocList();
+  } catch (e) {
+    alert('Upload failed: ' + e.message);
+  }
+}
+
+$('dropzone').addEventListener('click', () => $('fileInput').click());
+$('fileInput').addEventListener('change', (e) => {
+  if (e.target.files[0]) uploadFile(e.target.files[0]);
+});
+['dragover', 'dragleave', 'drop'].forEach(evt => {
+  $('dropzone').addEventListener(evt, (e) => {
+    e.preventDefault();
+    $('dropzone').classList.toggle('drag', evt === 'dragover');
+  });
+});
+$('dropzone').addEventListener('drop', (e) => {
+  if (e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]);
+});
+
+function confidenceClass(level) {
+  return { high: 'conf-high', medium: 'conf-medium', low: 'conf-low', none: '' }[level] || '';
+}
+
+function renderSignalBars(level) {
+  return `<div class="signal-bars ${confidenceClass(level)}">
+    ${[1,2,3,4,5].map(() => '<div class="bar"></div>').join('')}
+  </div>`;
+}
+
+function splitAnswer(text) {
+  const idx = text.toUpperCase().indexOf('ADDITIONAL INSIGHT');
+  if (idx === -1) return { docs: text, insight: '' };
+  const docsPart = text.slice(0, idx).replace(/FROM THE DOCUMENTS:?/i, '').trim();
+  const insightPart = text.slice(idx).replace(/ADDITIONAL INSIGHT:?/i, '').trim();
+  return { docs: docsPart, insight: insightPart };
+}
+
+function renderSources(sources) {
+  if (!sources || sources.length === 0) return '';
+  return sources.map(s => `
+    <div class="source-chip ${s.relevance === 'exact_match' ? 'exact' : ''}">
+      ${s.file || 'unknown'} <span class="loc">· ${s.locator ?? '?'}</span>
+    </div>
+  `).join('');
+}
+
+function updateInspector(sources, confidence) {
+  if (!sources || sources.length === 0) {
+    inspectorBody.innerHTML = '<div class="inspector-empty">No sources for this answer.</div>';
+    return;
+  }
+  inspectorBody.innerHTML = `
+    <div style="margin-bottom:16px;">
+      <div class="eyebrow" style="margin-bottom:8px;">Confidence: ${confidence}</div>
+      ${renderSignalBars(confidence)}
+    </div>
+    <div class="eyebrow">Sources</div>
+    ${sources.map(s => `
+      <div class="fact-row">
+        <span class="label">${s.file || 'unknown'}</span>
+        <span class="value">${s.locator ?? '?'} ${s.relevance === 'exact_match' ? '(exact)' : '· ' + s.relevance}</span>
+      </div>
+    `).join('')}
+  `;
+}
+
+async function loadMemoryIntoInspector() {
+  try {
+    const res = await fetch(`${apiBase()}/projects/memory?user_id=${uid()}&project_id=${pid()}`);
+    const data = await res.json();
+    if (!data.entries || data.entries.length === 0) return;
+    inspectorBody.innerHTML += `<div class="eyebrow" style="margin-top:20px;">Project Memory</div>` +
+      data.entries.slice(0, 10).map(e => `
+        <div class="memory-entry"><span class="tag">${e.entry_type}</span>${e.content}</div>
+      `).join('');
+  } catch (e) { /* non-fatal */ }
+}
+
+function addQABlock(question) {
+  clearEmptyState();
+  const block = document.createElement('div');
+  block.className = 'qa-block';
+  block.innerHTML = `
+    <div class="question">${question}</div>
+    <div class="answer-card">
+      <div class="answer-header">
+        <span class="panel-title">Response</span>
+        <div class="confidence-slot"></div>
+      </div>
+      <div class="answer-body"><p style="color:var(--steel); font-family:var(--mono); font-size:12px;">Querying...</p></div>
+      <div class="answer-footer"></div>
+    </div>
+  `;
+  stream.appendChild(block);
+  stream.scrollTop = stream.scrollHeight;
+  return block;
+}
+
+function fillAnswerBlock(block, answer, sources, confidence) {
+  const { docs, insight } = splitAnswer(answer);
+  block.querySelector('.confidence-slot').innerHTML =
+    `<div class="confidence">${confidence} ${renderSignalBars(confidence)}</div>`;
+  block.querySelector('.answer-body').innerHTML = `
+    <div class="answer-zone">
+      <div class="zone-label docs">From the documents</div>
+      <p>${docs || '(nothing found)'}</p>
+    </div>
+    ${insight ? `
+    <div class="answer-zone">
+      <div class="zone-label insight">Additional insight</div>
+      <p>${insight}</p>
+    </div>` : ''}
+  `;
+  block.querySelector('.answer-footer').innerHTML = renderSources(sources);
+  updateInspector(sources, confidence);
+  loadMemoryIntoInspector();
+}
+
+async function handleDiagramRequest(request, block) {
+  block.querySelector('.answer-body').innerHTML =
+    `<p style="color:var(--steel); font-family:var(--mono); font-size:12px;">Generating diagram...</p>`;
+  const res = await fetch(`${apiBase()}/diagram`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: uid(), project_id: pid(), request })
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    block.querySelector('.answer-body').innerHTML =
+      `<p style="color:var(--coral)">Error: ${data.detail || `Request failed (${res.status})`}</p>`;
+    return;
+  }
+  block.querySelector('.confidence-slot').innerHTML =
+    `<span style="font-family:var(--mono); font-size:10px; color:var(--steel); text-transform:uppercase;">${data.source}</span>`;
+
+  if (data.existing_figure_path) {
+    block.querySelector('.answer-body').innerHTML = `
+      <div class="diagram-card" style="margin:-16px;">
+        <img src="${apiBase()}${data.existing_figure_path}" />
+        <div class="caption">${data.existing_figure_caption}</div>
+      </div>`;
+  } else if (data.mermaid) {
+    const id = 'mmd-' + Date.now();
+    block.querySelector('.answer-body').innerHTML =
+      `<div class="mermaid-wrap" style="margin:-16px;"><div class="mermaid" id="${id}">${data.mermaid}</div></div>`;
+    try {
+      const { svg } = await mermaid.render(id + '-svg', data.mermaid);
+      document.getElementById(id).innerHTML = svg;
+    } catch (e) {
+      document.getElementById(id).textContent = data.mermaid;
+    }
+  } else {
+    block.querySelector('.answer-body').innerHTML = `<p>No diagram available.</p>`;
+  }
+}
+
+async function ask(streamMode) {
+  const question = $('questionInput').value.trim();
+  if (!question) return;
+  $('questionInput').value = '';
+  $('askBtn').disabled = true;
+  $('streamBtn').disabled = true;
+
+  const block = addQABlock(question);
+
+  if (question.toLowerCase().startsWith('diagram:')) {
+    await handleDiagramRequest(question.slice(8).trim(), block);
+    $('askBtn').disabled = false;
+    $('streamBtn').disabled = false;
+    return;
+  }
+
+  try {
+    if (streamMode) {
+      const res = await fetch(`${apiBase()}/ask/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: uid(), project_id: pid(), question })
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '', meta = null, answerText = '';
+      block.querySelector('.answer-body').innerHTML = `<div class="answer-zone"><p id="streamTarget"></p></div>`;
+      const target = block.querySelector('#streamTarget');
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        if (!meta) {
+          const nl = buffer.indexOf('\n');
+          if (nl !== -1) {
+            meta = JSON.parse(buffer.slice(0, nl));
+            buffer = buffer.slice(nl + 1);
+            block.querySelector('.confidence-slot').innerHTML =
+              `<div class="confidence">${meta.confidence} ${renderSignalBars(meta.confidence)}</div>`;
+            block.querySelector('.answer-footer').innerHTML = renderSources(meta.sources);
+            updateInspector(meta.sources, meta.confidence);
+          }
+        }
+        if (meta) {
+          answerText += buffer;
+          target.textContent = answerText;
+          buffer = '';
+          stream.scrollTop = stream.scrollHeight;
+        }
+      }
+      loadMemoryIntoInspector();
+    } else {
+      const res = await fetch(`${apiBase()}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: uid(), project_id: pid(), question })
+      });
+      const data = await res.json();
+      // fetch() does not throw on 4xx/5xx - without this, a 503 from the model
+      // backend renders as the literal string "undefined" in the answer pane
+      if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+      fillAnswerBlock(block, data.answer, data.sources, data.confidence);
+    }
+  } catch (e) {
+    block.querySelector('.answer-body').innerHTML = `<p style="color:var(--coral)">Error: ${e.message}</p>`;
+  }
+
+  $('askBtn').disabled = false;
+  $('streamBtn').disabled = false;
+}
+
+$('askBtn').addEventListener('click', () => ask(false));
+$('streamBtn').addEventListener('click', () => ask(true));
+$('questionInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(false); });
+</script>
+
+</body>
+</html>
