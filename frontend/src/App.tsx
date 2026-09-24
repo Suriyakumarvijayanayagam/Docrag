@@ -1,6 +1,6 @@
 import { FormEvent, KeyboardEvent, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowUp, BookMarked, Calculator, ExternalLink, FileText, FolderOpen, LoaderCircle, LogOut, Menu, MessageSquareText,
+  ArrowUp, BookMarked, Calculator, ClipboardCheck, ExternalLink, FileText, FolderOpen, LoaderCircle, LogOut, Menu, MessageSquareText,
   Paperclip, Plus, Search, Trash2, Upload, UserPlus, X,
 } from 'lucide-react'
 import { api, formatBytes } from './api'
@@ -8,12 +8,13 @@ import { AnswerBody, ConfidenceBadge } from './components/AnswerBody'
 import { Calculators } from './components/Calculators'
 import { DiagramCard } from './components/DiagramCard'
 import { ConfirmDialog, Dialog, FormDialog } from './components/Dialog'
+import { JobsView } from './components/JobsView'
 import { DatumMark } from './components/Logo'
 import { MemoryPanel } from './components/MemoryPanel'
 import type { ViewerTarget } from './components/PdfViewer'
-import type { Chat, Citation, Document, KnowledgeBase, Message, User } from './types'
+import type { Chat, Citation, Document, JobEvidence, KnowledgeBase, Message, User } from './types'
 
-type Page = 'ask' | 'library' | 'calc'
+type Page = 'ask' | 'library' | 'calc' | 'jobs'
 type Health = { ollama_available: boolean; chat_model: string }
 type Pending = { title: string; body: string; action: string; run: () => Promise<void> }
 
@@ -146,6 +147,7 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   const [pending, setPending] = useState<Pending | null>(null)
   const [kbSearch, setKbSearch] = useState('')
   const [source, setSource] = useState<Citation | null>(null)
+  const [excerpt, setExcerpt] = useState<JobEvidence | null>(null)
   const [viewer, setViewer] = useState<ViewerTarget | null>(null)
   const [toast, setToast] = useState('')
   const [health, setHealth] = useState<Health | null>(null)
@@ -211,6 +213,14 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
       setViewer({ documentId: citation.document_id, filename: citation.filename, page: citation.page_start, snippet: citation.exact ? null : citation.snippet, nonce: Date.now() })
     } else {
       setSource(citation)
+    }
+  }, [])
+
+  const openEvidence = useCallback((evidence: JobEvidence) => {
+    if (isPdf(evidence.filename) && evidence.page) {
+      setViewer({ documentId: evidence.document_id, filename: evidence.filename, page: evidence.page, snippet: evidence.snippet, nonce: Date.now() })
+    } else {
+      setExcerpt(evidence)
     }
   }, [])
 
@@ -491,6 +501,7 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
       <nav className="nav">
         <button className={page === 'ask' ? 'active' : ''} onClick={() => { setPage('ask'); setMobileSidebar(false) }}><MessageSquareText size={15} />Ask</button>
         <button className={page === 'library' ? 'active' : ''} onClick={() => { setPage('library'); setMobileSidebar(false) }}><FolderOpen size={15} />Library<span className="nav-count">{ownLibraries.length || ''}</span></button>
+        <button className={page === 'jobs' ? 'active' : ''} onClick={() => { setPage('jobs'); setMobileSidebar(false) }}><ClipboardCheck size={15} />Jobs</button>
         <button className={page === 'calc' ? 'active' : ''} onClick={() => { setPage('calc'); setMobileSidebar(false) }}><Calculator size={15} />Calculators</button>
       </nav>
       <div className="nav-heading">Threads</div>
@@ -507,7 +518,13 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
     </aside>
 
     <main className="main">
-      {page === 'calc' ? <section className="library">
+      {page === 'jobs' ? <div className={`ask-split ${viewer ? 'with-viewer' : ''}`}>
+        <div className="split-main">
+          <JobsView libraries={knowledgeBases} selectedKb={selectedKb} onSelectKb={setSelectedKb} onOpen={openEvidence} flash={flash}
+            menuButton={<button className="btn btn-ghost btn-icon menu-button" onClick={() => setMobileSidebar(true)} aria-label="Menu"><Menu size={17} /></button>} />
+        </div>
+        {viewer && <Suspense fallback={<aside className="viewer-pane"><p className="viewer-message">Opening viewer…</p></aside>}><PdfViewer key={viewer.documentId} target={viewer} onClose={() => setViewer(null)} /></Suspense>}
+      </div> : page === 'calc' ? <section className="library">
         <header className="view-header">
           <button className="btn btn-ghost btn-icon menu-button" onClick={() => setMobileSidebar(true)} aria-label="Menu"><Menu size={17} /></button>
           <h1>Calculators</h1>
@@ -652,6 +669,13 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
     </FormDialog>}
     {pending && <ConfirmDialog title={pending.title} body={pending.body} action={pending.action} onConfirm={pending.run} onClose={() => setPending(null)} />}
     {source && <SourceDialog citation={source} onClose={() => setSource(null)} />}
+    {excerpt && <Dialog title={excerpt.filename} onClose={() => setExcerpt(null)} width={560}>
+      <div className="dialog-body">
+        <p className="excerpt-meta">{[excerpt.label, excerpt.page ? `p. ${excerpt.page}` : excerpt.locator].filter(Boolean).join(' · ')}</p>
+        <blockquote className="excerpt">{excerpt.snippet || 'No excerpt recorded for this item.'}</blockquote>
+      </div>
+      <footer className="dialog-footer"><a className="btn" href={`/api/documents/${excerpt.document_id}/file`} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open original</a></footer>
+    </Dialog>}
     {toast && <div className="toast" role="status">{toast}</div>}
   </div>
 }

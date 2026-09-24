@@ -21,6 +21,15 @@ datasheets and design documents. It is not a general chatbot over files.
   number from the table instead of a paraphrase.
 - **Figures.** Start a question with `diagram:` to get a figure that already
   exists in the documents, or a Mermaid diagram drawn by the model if none matches.
+- **Job files with cross-document checks.** Put a job's WPS, PQR, welder
+  qualifications, consumable certificates and weld log together, and Datum
+  reads the key fields from each and checks them against each other: a WPS
+  thickness range beyond its PQR coupon, a certificate for the wrong electrode,
+  a welder on a joint they aren't qualified for (process, position), a
+  qualification lapsed through inactivity, a joint thicker than its WPS allows.
+  Every finding cites the page or log row on both sides, every extracted field
+  can be corrected by hand, and the findings print as an inspection-readiness
+  report. The checks are code, not the model.
 - **Reference libraries.** Standards, codes and consumable catalogues loaded
   once by the server operator, readable by every account, and searched
   alongside each team's own documents (switchable per thread).
@@ -69,6 +78,20 @@ docker compose down -v              # stop and delete ALL data, files and embedd
 ```
 
 API docs are served at http://localhost:3000/api/docs.
+
+## Job files
+
+**Jobs → New job**, then upload the job's documents. Each file's type (WPS,
+PQR, welder qualification, consumable certificate, weld log) is guessed from
+its name and first page; change it if it's wrong. Open a document to see the
+fields read from it, where each came from, and correct any value. **Run
+checks** lists findings by severity; click any evidence line to open that page
+with the value highlighted. **Report** prints the findings.
+
+Weld logs are spreadsheets (XLSX or CSV) with at least welder and WPS columns;
+joint, date, position, process and thickness columns are used when present.
+`sample-docs/job-2025-118/` is a fictional job with seven planted problems for
+trying it out.
 
 ## Reference libraries
 
@@ -153,6 +176,7 @@ Build a set from your own documents before trusting the numbers.
 | `RETRIEVAL_CANDIDATES` / `RETRIEVAL_TOP_K` | `12` / `5` | Fused candidates reranked, and passages kept |
 | `RERANK_ENABLED` | `true` | `false` is faster, but grounding then never reads "strong" |
 | `MEMORY_ENABLED` | `true` | Distil questions into library memory |
+| `EXTRACTION_MODEL_FALLBACK` | `true` | Let the model propose job fields the table/text rules missed (kept only if found verbatim) |
 | `DOMAIN_CONTEXT` | welding text | Who answers are for; added to the prompt. Empty string for a general document tool |
 | `REGISTRATION_ENABLED` | `true` | Turn off once everyone has an account |
 

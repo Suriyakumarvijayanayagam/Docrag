@@ -209,7 +209,90 @@ d.add_paragraph("All welds receive 100 percent visual inspection. The root pass 
                 "metal before the second-side weld. Arc strikes outside the weld groove are not permitted.")
 d.save(str(OUT / "Sample_WPS-SMAW-017.docx"))
 
+# ---------- Sample job file JOB-2025-118 (fictional, with planted mistakes) ----------
+# Everything needed for the job checks, with problems a QA engineer would want
+# caught before an inspector finds them:
+#   PQR coupon 10 mm, WPS claims up to 25 mm (over 2T)
+#   consumable certificate is for E7016, WPS specifies E7018
+#   weld log: W-14 welded 3G (qualified 1G/2G), W-22 is GMAW-only on an SMAW
+#   WPS, W-31 has no qualification, a joint cites WPS-SMAW-021 (not in the job),
+#   a 32 mm joint on a 10-25 mm WPS, and W-14 idle > 6 months before J-104.
+JOB = OUT / "job-2025-118"
+JOB.mkdir(exist_ok=True)
+d.save(str(JOB / "Sample_WPS-SMAW-017.docx"))
+
+
+def record_pdf(path, title, subtitle, rows, note):
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((60, 70), title, fontsize=16)
+    page.insert_text((60, 92), subtitle, fontsize=10)
+    page.insert_text((60, 110), "SAMPLE DOCUMENT FOR TESTING ONLY - fictional company, people and values.", fontsize=8)
+    bottom = ruled_table(page, 60, 130, rows, col_w=(200, 260))
+    page.insert_text((60, bottom + 30), note, fontsize=9)
+    doc.save(str(path))
+
+
+record_pdf(JOB / "Sample_PQR-017.pdf", "PQR-017", "Procedure Qualification Record", [
+    ("Item", "Record"),
+    ("PQR No.", "PQR-017"),
+    ("Welding process", "SMAW"),
+    ("Base metal", "IS 2062 E250 BR"),
+    ("Coupon thickness", "10 mm"),
+    ("Filler metal", "AWS A5.1 E7018, 3.15 mm and 4.0 mm"),
+    ("Test position", "2G (PC)"),
+    ("Preheat", "50 C"),
+    ("Date of test", "12/03/2025"),
+    ("Tensile and bend tests", "Acceptable"),
+], "Supports WPS-SMAW-017.")
+
+for welder_id, name, process, tested_in, qualified, filler, tested_on in (
+    ("W-14", "R. Kumar", "SMAW", "2G (PC)", "1G, 2G", "AWS A5.1 E7018", "20/01/2025"),
+    ("W-22", "A. Singh", "GMAW", "3G (PF)", "1G, 2G, 3G, 4G", "AWS A5.18 ER70S-6", "01/02/2025"),
+):
+    record_pdf(JOB / f"Sample_WPQ-{welder_id.replace('-', '')}.pdf", f"WPQ {welder_id}", "Welder Performance Qualification Record", [
+        ("Item", "Record"),
+        ("Welder name", name),
+        ("Welder ID", welder_id),
+        ("Welding process", process),
+        ("Test position", tested_in),
+        ("Positions qualified", qualified),
+        ("Filler metal", filler),
+        ("Date of test", tested_on),
+        ("Result", "Qualified"),
+    ], "Visual and bend tests witnessed by the QA engineer.")
+
+record_pdf(JOB / "Sample_TC-4471.pdf", "Test Certificate TC-4471", "Inspection certificate EN 10204 3.1 - covered electrodes", [
+    ("Item", "Record"),
+    ("Product", "Low-hydrogen covered electrode"),
+    ("AWS classification", "A5.1 E7016"),
+    ("Batch no.", "4471"),
+    ("Diameter", "4.0 mm"),
+    ("Date of issue", "05/03/2025"),
+], "Chemical and mechanical results conform to the classification.")
+
+from datetime import datetime as _dt
+from openpyxl import Workbook
+
+book = Workbook()
+sheet = book.active
+sheet.title = "Weld log"
+sheet.append(["JOB-2025-118 pipe rack - weld log (SAMPLE, fictional)"])
+sheet.append([])
+sheet.append(["Joint No.", "Welder ID", "WPS No.", "Date welded", "Position", "Thickness (mm)"])
+for joint, welder, wps, day, position, thickness in (
+    ("J-101", "W-14", "WPS-SMAW-017", "2025-04-02", "1G", 12),
+    ("J-102", "W-14", "WPS-SMAW-017", "2025-04-20", "3G", 12),
+    ("J-103", "W-22", "WPS-SMAW-017", "2025-04-21", "1G", 12),
+    ("J-105", "W-31", "WPS-SMAW-017", "2025-05-01", "1G", 12),
+    ("J-106", "W-14", "WPS-SMAW-021", "2025-05-02", "1G", 12),
+    ("J-107", "W-14", "WPS-SMAW-017", "2025-05-03", "1G", 32),
+    ("J-104", "W-14", "WPS-SMAW-017", "2025-11-15", "2G", 16),
+):
+    sheet.append([joint, welder, wps, _dt.fromisoformat(day), position, thickness])
+book.save(str(JOB / "Sample_WeldLog_JOB-2025-118.xlsx"))
+
 png.unlink(missing_ok=True)  # intermediate used to build the PDF, not a sample
 
-for f in sorted(OUT.glob("*")):
+for f in sorted(p for p in OUT.rglob("*") if p.is_file()):
     print(f"  {f.name}  ({f.stat().st_size//1024} KB)")

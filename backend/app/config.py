@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     rerank_enabled: bool = True
     # Set false to stop distilling chat exchanges into knowledge-base memory.
     memory_enabled: bool = True
+    # Let the model propose job-document fields the table and text rules missed.
+    # Its values are only kept when they appear verbatim in the document.
+    extraction_model_fallback: bool = True
     # Who the answers are for; added to the answer prompt. Set DOMAIN_CONTEXT to
     # retarget the assistant, or to an empty string for a general document tool.
     domain_context: str = (

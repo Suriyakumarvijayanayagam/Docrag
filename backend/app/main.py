@@ -12,18 +12,19 @@ from pydantic import BaseModel, EmailStr, Field
 from app import llm, memory, welding
 from app.config import settings
 from app.db import connection, initialize_database
-from app.ingestion import SUPPORTED_EXTENSIONS
 from app.retrieval import history_for_chat
+from app.routes_jobs import router as jobs_router
 from app.security import (
     COOKIE_NAME, User, create_token, hash_password, jwt_secret, require_kb_access, require_kb_write, verify_password,
 )
-from app.storage import remove_document_files, store_document
+from app.storage import remove_document_files
+from app.uploads import DOCUMENT_COLUMNS, save_uploads
 from app.streaming import answer_stream, diagram_request, diagram_stream
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("datum.api")
 
-app = FastAPI(title="Datum", version="0.2.0", docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
+app = FastAPI(title="Datum", version="0.3.0", docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
@@ -101,6 +102,9 @@ def _set_session(response: JSONResponse, user_id: str) -> JSONResponse:
         samesite="lax", max_age=settings.jwt_expire_hours * 3600, path="/",
     )
     return response
+
+
+app.include_router(jobs_router)
 
 
 @app.on_event("startup")
@@ -246,39 +250,10 @@ def delete_memory_entry(kb_id: UUID, entry_id: int, user: dict = User):
     return {"ok": True}
 
 
-DOCUMENT_COLUMNS = (
-    "id", "filename", "content_type", "byte_size", "status", "error_message",
-    "page_count", "chunk_count", "fact_count", "figure_count", "created_at", "updated_at",
-)
-
-
-def _document_row(row: dict) -> dict:
-    return {key: row[key] for key in DOCUMENT_COLUMNS}
-
-
-def _save_uploads(files: list[UploadFile], user_id: UUID, kb_id: UUID | None = None, chat_id: UUID | None = None) -> list[dict]:
-    if not files:
-        raise HTTPException(status_code=400, detail="Choose at least one file")
-    saved = []
-    for upload in files:
-        original_name = Path(upload.filename or "document").name
-        extension = Path(original_name).suffix.lower()
-        if extension not in SUPPORTED_EXTENSIONS:
-            raise HTTPException(status_code=415, detail=f"Unsupported file type: {extension or 'unknown'}")
-        content = upload.file.read(settings.max_upload_mb * 1024 * 1024 + 1)
-        if not content:
-            raise HTTPException(status_code=400, detail=f"{original_name} is empty")
-        if len(content) > settings.max_upload_mb * 1024 * 1024:
-            raise HTTPException(status_code=413, detail=f"{original_name} exceeds {settings.max_upload_mb} MB")
-        row = store_document(content, original_name, upload.content_type, kb_id=kb_id, chat_id=chat_id, user_id=user_id)
-        saved.append(row if row.get("status") == "duplicate" else _document_row(row))
-    return saved
-
-
 @app.post("/api/knowledge-bases/{kb_id}/documents", status_code=202)
 def upload_to_knowledge_base(kb_id: UUID, files: Annotated[list[UploadFile], File()], user: dict = User):
     require_kb_write(user["id"], str(kb_id))
-    return {"documents": _save_uploads(files, user["id"], kb_id=kb_id)}
+    return {"documents": save_uploads(files, user["id"], kb_id=kb_id)}
 
 
 @app.get("/api/knowledge-bases/{kb_id}/documents")
@@ -381,7 +356,7 @@ def delete_chat(chat_id: UUID, user: dict = User):
 @app.post("/api/chats/{chat_id}/documents", status_code=202)
 def upload_to_chat(chat_id: UUID, files: Annotated[list[UploadFile], File()], user: dict = User):
     _get_chat(chat_id, user["id"])
-    return {"documents": _save_uploads(files, user["id"], chat_id=chat_id)}
+    return {"documents": save_uploads(files, user["id"], chat_id=chat_id)}
 
 
 def _visible_document(document_id: UUID, user: dict) -> dict:

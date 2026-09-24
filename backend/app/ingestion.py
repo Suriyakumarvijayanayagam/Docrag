@@ -14,7 +14,7 @@ from app.chunking import TextBlock, chunk_blocks
 from app.config import settings
 
 SUPPORTED_EXTENSIONS = {
-    ".pdf", ".docx", ".txt", ".md", ".pptx", ".xlsx", ".html", ".htm",
+    ".pdf", ".docx", ".txt", ".md", ".csv", ".pptx", ".xlsx", ".html", ".htm",
     ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp",
 }
 

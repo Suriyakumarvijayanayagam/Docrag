@@ -152,6 +152,37 @@ deliberately strict: an unrelated figure is worse than a generated diagram.
 
 ---
 
+## Flow 4: checking a job file
+
+```
+ Job documents (WPS, PQR, WPQs, consumable certs, weld log) in a library
+   │
+   ▼
+ Field extraction, per document type (job_fields.py)
+   1. table rows whose label matches  ("Coupon thickness" → 10 mm, p. 1)
+   2. "Label: value" lines in the text
+   3. the model, for what's still missing - kept ONLY if the value appears
+      verbatim in the document, so it can't invent one
+   + any value a person corrected by hand (shown as "entered by hand")
+   Weld logs are read directly from the spreadsheet, row by row.
+   │
+   ▼
+ Checks in plain code (job_checks.py) - same documents, same findings
+   consistency  documents disagree: process, filler, base metal, certificate
+                vs WPS, log vs WPS/qualification (welder, process, position,
+                thickness, dates)
+   code_rule    a few named clauses, each with "verify against your edition":
+                2T thickness (ASME IX QW-451.1), 6-month continuity (QW-322.1)
+   missing      a document or field the checks need
+   │
+   ▼
+ Findings with evidence from both sides → page highlight / excerpt → printable report
+```
+
+Extractions are cached per document and re-read when the document is
+re-indexed or `job_fields.EXTRACTOR_VERSION` changes. Checks never call the
+model, so they are fast, repeatable and testable.
+
 ## Welding calculators
 
 `backend/app/welding.py`, served at `/api/calc/*` and on the Calculators page:

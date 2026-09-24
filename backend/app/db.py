@@ -158,6 +158,36 @@ ALTER TABLE knowledge_bases ALTER COLUMN created_by DROP NOT NULL;
 ALTER TABLE documents ALTER COLUMN uploaded_by DROP NOT NULL;
 -- Whether a thread also searches the reference libraries.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS use_reference BOOLEAN NOT NULL DEFAULT true;
+
+-- A job file: the WPS, PQR, welder qualifications, consumable certificates and
+-- weld log for one fabrication job, cross-checked by job_checks.py. Jobs live in
+-- a library so the team shares them; documents stay in the library and are
+-- linked here with their type.
+CREATE TABLE IF NOT EXISTS jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    last_check JSONB,
+    checked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS jobs_kb_idx ON jobs(knowledge_base_id, created_at);
+
+CREATE TABLE IF NOT EXISTS job_documents (
+    job_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    doc_type TEXT NOT NULL CHECK (doc_type IN ('wps', 'pqr', 'wpq', 'consumable', 'weld_log', 'other')),
+    -- fields a person corrected: {field: value}; null removes a wrong extraction
+    overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- cached extraction, valid while extracted_for matches the document's updated_at
+    extracted JSONB,
+    extracted_for TIMESTAMPTZ,
+    added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (job_id, document_id)
+);
 """
 
 # Bump whenever extraction changes in a way existing documents should pick up
