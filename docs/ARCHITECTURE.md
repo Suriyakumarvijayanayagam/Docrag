@@ -46,11 +46,14 @@ Nothing in the stack calls a cloud service at runtime.
 
 Every document belongs to exactly one of:
 
-- a **library** (knowledge base), visible to its members, or
+- a **library** (knowledge base), visible to its members,
+- a **reference library**, loaded by the server operator
+  (`scripts/load_reference.py`) and readable, not writable, by every account, or
 - a **thread**, as an attachment, visible only to the thread's owner.
 
-A question searches the thread's library plus the thread's own attachments,
-nothing else. That scope is one SQL fragment (`retrieval.SCOPE_SQL`) used by
+A question searches the thread's library, the thread's own attachments, and
+the reference libraries if the thread's "Include reference" switch is on
+(the default). Nothing else. That scope is one SQL fragment (`retrieval.SCOPE_SQL`) used by
 every retrieval query, and the API checks membership before retrieval runs.
 Table values, figures and passages all hang off `documents` with
 `ON DELETE CASCADE`, so deleting a document removes everything indexed from
@@ -58,6 +61,9 @@ it; the files on disk are removed by `storage.remove_document_files`.
 
 Library owners can invite other accounts, delete the library, and remove any
 document. Members can read, ask, upload, and remove what they uploaded.
+Everyone is a reader of reference libraries: they can search and open them,
+but not upload, delete, or write memory into them, since memory in a shared
+library would carry one user's conversations to everyone.
 
 ---
 
@@ -145,6 +151,24 @@ A real figure from the document always wins over a drawn one. Matching is
 deliberately strict: an unrelated figure is worse than a generated diagram.
 
 ---
+
+## Welding calculators
+
+`backend/app/welding.py`, served at `/api/calc/*` and on the Calculators page:
+
+| Calculation | Formula | Reference |
+|---|---|---|
+| Arc energy | V × I × 60 / (1000 × travel speed mm/min), kJ/mm | ASME IX QW-409.1(a) |
+| Heat input | k × arc energy; k = 1.0 SAW, 0.8 SMAW/GMAW/FCAW/MCAW, 0.6 GTAW/PAW | ISO/TR 17671-1 |
+| CE (IIW) | C + Mn/6 + (Cr+Mo+V)/5 + (Ni+Cu)/15 | IIW |
+| CET | C + (Mn+Mo)/10 + (Cr+Cu)/20 + Ni/40 | EN 1011-2 Annex C |
+| Pcm | C + Si/30 + (Mn+Cu+Cr)/20 + Ni/60 + Mo/15 + V/10 + 5B | Ito-Bessyo |
+| Preheat | 697·CET + 160·tanh(d/35) + 62·HD^0.35 + (53·CET − 32)·Q − 328 °C | EN 1011-2 Annex C |
+
+Each result lists warnings when inputs leave the method's validated range
+(for preheat: CET 0.2-0.5 %, d 10-90 mm, HD 1-20 ml/100 g, Q 0.5-4.0 kJ/mm).
+They exist because a 3B model does arithmetic badly and confidently; the
+answer prompt tells the model to point here rather than calculate.
 
 ## Decisions worth knowing before changing things
 

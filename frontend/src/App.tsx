@@ -1,10 +1,11 @@
 import { FormEvent, KeyboardEvent, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowUp, ExternalLink, FileText, FolderOpen, LoaderCircle, LogOut, Menu, MessageSquareText,
+  ArrowUp, BookMarked, Calculator, ExternalLink, FileText, FolderOpen, LoaderCircle, LogOut, Menu, MessageSquareText,
   Paperclip, Plus, Search, Trash2, Upload, UserPlus, X,
 } from 'lucide-react'
 import { api, formatBytes } from './api'
 import { AnswerBody, ConfidenceBadge } from './components/AnswerBody'
+import { Calculators } from './components/Calculators'
 import { DiagramCard } from './components/DiagramCard'
 import { ConfirmDialog, Dialog, FormDialog } from './components/Dialog'
 import { DatumMark } from './components/Logo'
@@ -12,7 +13,7 @@ import { MemoryPanel } from './components/MemoryPanel'
 import type { ViewerTarget } from './components/PdfViewer'
 import type { Chat, Citation, Document, KnowledgeBase, Message, User } from './types'
 
-type Page = 'ask' | 'library'
+type Page = 'ask' | 'library' | 'calc'
 type Health = { ollama_available: boolean; chat_model: string }
 type Pending = { title: string; body: string; action: string; run: () => Promise<void> }
 
@@ -24,6 +25,15 @@ const PdfViewer = lazy(() => import('./components/PdfViewer').then(module => ({ 
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 const isPdf = (filename: string) => filename.toLowerCase().endsWith('.pdf')
+
+function LibraryOptions({ libraries }: { libraries: KnowledgeBase[] }) {
+  const own = libraries.filter(kb => !kb.is_reference)
+  const reference = libraries.filter(kb => kb.is_reference)
+  return <>
+    {own.map(kb => <option value={kb.id} key={kb.id}>{kb.name}</option>)}
+    {reference.length > 0 && <optgroup label="Reference (read-only)">{reference.map(kb => <option value={kb.id} key={kb.id}>{kb.name}</option>)}</optgroup>}
+  </>
+}
 
 function shortDate(value: string): string {
   const date = new Date(value)
@@ -142,6 +152,7 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   const [uploading, setUploading] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [mobileSidebar, setMobileSidebar] = useState(false)
+  const [useReference, setUseReference] = useState(true)
   const fileInput = useRef<HTMLInputElement>(null)
   const chatFileInput = useRef<HTMLInputElement>(null)
   const knowledgeSearchInput = useRef<HTMLInputElement>(null)
@@ -152,6 +163,10 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   const selectedChatKb = activeChat ? (activeChat.knowledge_base_id || '') : selectedKb
   const chatKnowledgeBase = knowledgeBases.find(kb => kb.id === selectedChatKb)
   const modelOffline = health !== null && !health.ollama_available
+  const referenceLibraries = knowledgeBases.filter(kb => kb.is_reference)
+  const ownLibraries = knowledgeBases.filter(kb => !kb.is_reference)
+  const threadUsesReference = activeChat ? activeChat.use_reference !== false : useReference
+  const canUseReference = referenceLibraries.length > 0 && !chatKnowledgeBase?.is_reference
 
   const flash = useCallback((message: string) => {
     setToast(message)
@@ -258,7 +273,7 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
     try {
       const created = await api<{ chat: Chat }>('/chats', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ knowledge_base_id: selectedKb || null }),
+        body: JSON.stringify({ knowledge_base_id: selectedKb || null, use_reference: useReference }),
       })
       setActiveChat(created.chat)
       void loadBaseData()
@@ -434,6 +449,13 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
     })
   }
 
+  function changeUseReference(value: boolean) {
+    setUseReference(value)
+    if (!activeChat) return
+    api<{ chat: Chat }>(`/chats/${activeChat.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ use_reference: value }) })
+      .then(result => setActiveChat(result.chat)).catch(error => flash(errorText(error, 'Could not change the search scope')))
+  }
+
   function changeChatLibrary(value: string) {
     setSelectedKb(value)
     if (!activeChat) return
@@ -468,7 +490,8 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
       <button className="btn new-thread" onClick={() => void startNewChat()}><Plus size={14} />New thread<kbd>⌘K</kbd></button>
       <nav className="nav">
         <button className={page === 'ask' ? 'active' : ''} onClick={() => { setPage('ask'); setMobileSidebar(false) }}><MessageSquareText size={15} />Ask</button>
-        <button className={page === 'library' ? 'active' : ''} onClick={() => { setPage('library'); setMobileSidebar(false) }}><FolderOpen size={15} />Library<span className="nav-count">{knowledgeBases.length || ''}</span></button>
+        <button className={page === 'library' ? 'active' : ''} onClick={() => { setPage('library'); setMobileSidebar(false) }}><FolderOpen size={15} />Library<span className="nav-count">{ownLibraries.length || ''}</span></button>
+        <button className={page === 'calc' ? 'active' : ''} onClick={() => { setPage('calc'); setMobileSidebar(false) }}><Calculator size={15} />Calculators</button>
       </nav>
       <div className="nav-heading">Threads</div>
       <div className="threads">
@@ -484,11 +507,17 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
     </aside>
 
     <main className="main">
-      {page === 'library' ? <section className="library">
+      {page === 'calc' ? <section className="library">
+        <header className="view-header">
+          <button className="btn btn-ghost btn-icon menu-button" onClick={() => setMobileSidebar(true)} aria-label="Menu"><Menu size={17} /></button>
+          <h1>Calculators</h1>
+        </header>
+        <div className="library-body"><Calculators /></div>
+      </section> : page === 'library' ? <section className="library">
         <header className="view-header">
           <button className="btn btn-ghost btn-icon menu-button" onClick={() => setMobileSidebar(true)} aria-label="Menu"><Menu size={17} /></button>
           <h1>Library</h1>
-          {knowledgeBases.length > 0 && <select className="select" value={selectedKb} onChange={event => setSelectedKb(event.target.value)} aria-label="Library">{knowledgeBases.map(kb => <option value={kb.id} key={kb.id}>{kb.name}</option>)}</select>}
+          {knowledgeBases.length > 0 && <select className="select" value={selectedKb} onChange={event => setSelectedKb(event.target.value)} aria-label="Library"><LibraryOptions libraries={knowledgeBases} /></select>}
           <div className="view-actions">
             {activeKb?.role === 'owner' && <>
               <button className="btn" onClick={() => setDialog('invite')}><UserPlus size={14} />Invite</button>
@@ -503,8 +532,9 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
           <p>A library is a set of documents you ask questions against: one per product, project or review. Create one, then add datasheets, specs or reports to it.</p>
           <button className="btn btn-primary" onClick={() => setDialog('create')}><Plus size={14} />New library</button>
         </div> : <div className="library-body">
+          {activeKb?.is_reference && <p className="reference-note"><BookMarked size={14} />Reference library, readable by everyone on this server and searched alongside your own documents. It's maintained by the server operator, so it can't be changed here.</p>}
           {activeKb?.description && <p className="library-description">{activeKb.description}</p>}
-          <div className={`dropzone ${dragging ? 'over' : ''}`}
+          {!activeKb?.is_reference && <div className={`dropzone ${dragging ? 'over' : ''}`}
             onDragOver={event => { event.preventDefault(); setDragging(true) }}
             onDragLeave={() => setDragging(false)}
             onDrop={event => { event.preventDefault(); setDragging(false); void uploadFiles(event.dataTransfer.files, 'library') }}>
@@ -512,7 +542,7 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
             <span>Drop files here or <button className="link" onClick={() => fileInput.current?.click()}>choose files</button>. PDF, DOCX, PPTX, XLSX, Markdown, text, HTML or images, up to 50 MB each.</span>
             {uploading && <LoaderCircle className="spin" size={15} />}
             <input ref={fileInput} type="file" multiple accept={ACCEPT} hidden onChange={event => void uploadFiles(event.target.files, 'library')} />
-          </div>
+          </div>}
 
           <section className="panel">
             <header className="panel-header">
@@ -535,14 +565,14 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
                     <td className="muted">{shortDate(document.created_at)}</td>
                     <td className="row-actions">
                       {isPdf(document.filename) && document.status === 'ready' && <button className="btn btn-ghost btn-icon" onClick={() => { openPage(document.id, document.filename, 1); setPage('ask') }} title="Open"><ExternalLink size={14} /></button>}
-                      <button className="btn btn-ghost btn-icon danger" onClick={() => confirmDeleteDocument(document)} title="Remove"><Trash2 size={14} /></button>
+                      {!activeKb?.is_reference && <button className="btn btn-ghost btn-icon danger" onClick={() => confirmDeleteDocument(document)} title="Remove"><Trash2 size={14} /></button>}
                     </td>
                   </tr>)}
               </tbody>
             </table></div>
           </section>
 
-          {selectedKb && <MemoryPanel knowledgeBaseId={selectedKb} onError={flash} />}
+          {selectedKb && !activeKb?.is_reference && <MemoryPanel knowledgeBaseId={selectedKb} onError={flash} />}
         </div>}
       </section> : <div className={`ask-split ${viewer ? 'with-viewer' : ''}`}>
         <section className="ask">
@@ -552,9 +582,12 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
             <label className="scope">Library
               <select className="select" value={selectedChatKb || ''} onChange={event => changeChatLibrary(event.target.value)}>
                 <option value="">None, attached files only</option>
-                {knowledgeBases.map(kb => <option value={kb.id} key={kb.id}>{kb.name}</option>)}
+                <LibraryOptions libraries={knowledgeBases} />
               </select>
             </label>
+            {canUseReference && <label className="toggle" title={referenceLibraries.map(kb => kb.name).join(', ')}>
+              <input type="checkbox" checked={threadUsesReference} onChange={event => changeUseReference(event.target.checked)} />Include reference
+            </label>}
           </header>
 
           <div className="transcript">
@@ -566,6 +599,8 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
                 <div className="intro-help">
                   <p>Answers cite the page each claim comes from; click a citation to see it highlighted in the document. Text the model adds on its own is shown separately.</p>
                   <p>Start a message with <code>diagram:</code> to pull a figure from the documents, or have one drawn if none matches.</p>
+                  {canUseReference && threadUsesReference && <p>Also searching the reference {referenceLibraries.length === 1 ? 'library' : 'libraries'}: {referenceLibraries.map(kb => kb.name).join(', ')}.</p>}
+                  <p>Heat input, carbon equivalent and preheat are worked out exactly on the <button className="link" onClick={() => setPage('calc')}>Calculators</button> page, not by the model.</p>
                 </div>
               </> : <>
                 <h2>No library selected</h2>

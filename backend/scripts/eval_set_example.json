@@ -13,5 +13,15 @@
     "question": "What is the maximum output ripple allowed on the Orion logic rail?",
     "expected_keyword": "20 mV",
     "expected_source_file": "Orion_requirements.docx"
+  },
+  {
+    "question": "What is the maximum interpass temperature allowed by WPS-SMAW-017?",
+    "expected_keyword": "250",
+    "expected_source_file": "Sample_WPS-SMAW-017.docx"
+  },
+  {
+    "question": "Which electrode classification does WPS-SMAW-017 use and how must it be baked?",
+    "expected_keyword": "E7018",
+    "expected_source_file": "Sample_WPS-SMAW-017.docx"
   }
 ]

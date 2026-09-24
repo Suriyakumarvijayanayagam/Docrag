@@ -4,9 +4,10 @@ with weighted Reciprocal Rank Fusion. Full-text catches exact tokens (part
 numbers, register names) that embeddings drift away from; vectors catch
 paraphrases.
 
-Every query here is limited to what one chat may see: ready documents in its
-knowledge base plus files attached to the chat itself (SCOPE_SQL). Access to
-the knowledge base is checked by the API layer before retrieval is called.
+Every query here is limited to what one chat may see (SCOPE_SQL): ready
+documents in its knowledge base, files attached to the chat itself, and - when
+the chat has use_reference on - the reference libraries every account can
+read. Access to the knowledge base is checked by the API layer first.
 """
 from collections import defaultdict
 import re
@@ -37,13 +38,14 @@ SUMMARY_ROW_VALUES = {"total", "grand total", "subtotal", "sub total", "overall 
 
 SCOPE_SQL = """d.status='ready'
    AND ((%(kb)s::uuid IS NOT NULL AND d.knowledge_base_id=%(kb)s::uuid)
-        OR d.conversation_id=%(chat)s::uuid)"""
+        OR d.conversation_id=%(chat)s::uuid
+        OR (%(ref)s AND d.knowledge_base_id IN (SELECT id FROM knowledge_bases WHERE is_reference)))"""
 
 _COMPARISON_RE = re.compile(r"\b(compare|comparison|vs\.?|versus|difference between|differences|which is better|across)\b")
 
 
-def _scope(knowledge_base_id: str | None, chat_id: str) -> dict:
-    return {"kb": UUID(knowledge_base_id) if knowledge_base_id else None, "chat": UUID(chat_id)}
+def _scope(knowledge_base_id: str | None, chat_id: str, use_reference: bool) -> dict:
+    return {"kb": UUID(knowledge_base_id) if knowledge_base_id else None, "chat": UUID(chat_id), "ref": use_reference}
 
 
 def is_exhaustive_query(query: str) -> bool:
@@ -142,7 +144,7 @@ def _query_terms(query: str) -> set[str]:
     return {term[:-1] if len(term) > 4 and term.endswith("s") else term for term in terms}
 
 
-def retrieve(query: str, knowledge_base_id: str | None, chat_id: str, limit: int) -> list[dict]:
+def retrieve(query: str, knowledge_base_id: str | None, chat_id: str, limit: int, use_reference: bool = False) -> list[dict]:
     """
     Fused candidates, best first. For count/list questions the single most
     relevant document is returned whole instead (up to MAX_EXHAUSTIVE_CHUNKS),
@@ -152,7 +154,7 @@ def retrieve(query: str, knowledge_base_id: str | None, chat_id: str, limit: int
     query_terms = _query_terms(query) or set(re.findall(r"[a-z0-9]+", query.lower()))
     lexical_query = " | ".join(sorted(query_terms)[:16])
     query_vector = llm.embed_query(query)
-    scope = _scope(knowledge_base_id, chat_id)
+    scope = _scope(knowledge_base_id, chat_id, use_reference)
     ranked: dict[int, dict] = {}
     with connection() as conn:
         if query_vector:
@@ -225,24 +227,24 @@ def retrieve(query: str, knowledge_base_id: str | None, chat_id: str, limit: int
     ]
 
 
-def lookup_facts(query: str, knowledge_base_id: str | None, chat_id: str) -> list[dict]:
+def lookup_facts(query: str, knowledge_base_id: str | None, chat_id: str, use_reference: bool = False) -> list[dict]:
     with connection() as conn:
         facts = conn.execute(
             f"""SELECT f.id, f.page, f.locator, f.label, f.value, d.id AS document_id, d.filename
                FROM structured_facts f JOIN documents d ON d.id=f.document_id
                WHERE {SCOPE_SQL}""",
-            _scope(knowledge_base_id, chat_id),
+            _scope(knowledge_base_id, chat_id, use_reference),
         ).fetchall()
     return match_facts(query, facts)
 
 
-def figures_in_scope(knowledge_base_id: str | None, chat_id: str) -> list[dict]:
+def figures_in_scope(knowledge_base_id: str | None, chat_id: str, use_reference: bool = False) -> list[dict]:
     with connection() as conn:
         return conn.execute(
             f"""SELECT f.id, f.page, f.locator, f.caption, d.id AS document_id, d.filename
                FROM figures f JOIN documents d ON d.id=f.document_id
                WHERE {SCOPE_SQL} ORDER BY d.created_at, f.id""",
-            _scope(knowledge_base_id, chat_id),
+            _scope(knowledge_base_id, chat_id, use_reference),
         ).fetchall()
 
 

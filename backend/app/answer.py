@@ -127,17 +127,18 @@ def build_sources(passages: list[dict], facts: list[dict]) -> list[dict]:
     return sources
 
 
-def prepare(query: str, knowledge_base_id: str | None, chat_id: str, history: list[dict]) -> PreparedAnswer:
+def prepare(query: str, knowledge_base_id: str | None, chat_id: str, history: list[dict],
+            use_reference: bool = False) -> PreparedAnswer:
     exhaustive = is_exhaustive_query(query)
     if exhaustive:
-        passages = retrieve(query, knowledge_base_id, chat_id, limit=settings.retrieval_candidates)
+        passages = retrieve(query, knowledge_base_id, chat_id, settings.retrieval_candidates, use_reference)
         facts: list[dict] = []
         complete = bool(passages) and all(passage.get("document_complete") for passage in passages)
         # The whole document is in the prompt, but nothing verified it is the right one.
         confidence = "none" if not passages else ("medium" if complete else "low")
     else:
-        facts = lookup_facts(query, knowledge_base_id, chat_id)
-        candidates = retrieve(query, knowledge_base_id, chat_id, limit=settings.retrieval_candidates)
+        facts = lookup_facts(query, knowledge_base_id, chat_id, use_reference)
+        candidates = retrieve(query, knowledge_base_id, chat_id, settings.retrieval_candidates, use_reference)
         if is_comparison_query(query):
             candidates = ensure_document_diversity(candidates)
         if settings.rerank_enabled:
@@ -165,8 +166,9 @@ def prepare(query: str, knowledge_base_id: str | None, chat_id: str, history: li
         # Earlier answers may contain the very counting mistake this path corrects.
         history = [message for message in history if message["role"] == "user"][-2:]
 
+    domain = f"{settings.domain_context}\n\n" if settings.domain_context else ""
     system = (
-        f"{ANSWER_SYSTEM}\n\n{render_block(knowledge_base_id)}\n{guidance}\n"
+        f"{ANSWER_SYSTEM}\n\n{domain}{render_block(knowledge_base_id)}\n{guidance}\n"
         f"DOCUMENT EXCERPTS AND FACTS:\n{evidence}"
     )
     messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": query}]

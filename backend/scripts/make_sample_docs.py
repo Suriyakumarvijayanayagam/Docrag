@@ -170,6 +170,45 @@ d.add_paragraph("The 20 mV ripple limit is driven by the 16-bit ADC on the senso
                 "directly.")
 d.save(str(OUT / "Orion_requirements.docx"))
 
+# A welding procedure specification. Fictional: made up for testing the
+# pipeline, not a qualified procedure. The wide parameter table exercises the
+# "entity.column" flattening in fact extraction.
+d = Document()
+d.add_heading("WPS-SMAW-017 - Welding Procedure Specification", level=1)
+d.add_paragraph("SAMPLE DOCUMENT FOR TESTING ONLY. Fictional company and values; not a qualified procedure.")
+d.add_paragraph("Scope: single-V butt welds in structural steel plate for general fabrication, "
+                "supported by PQR-017. Welders must hold a current qualification for the positions listed.")
+d.add_heading("Table 1: Procedure variables", level=2)
+t = d.add_table(rows=0, cols=2)
+for label, value in [
+    ("Welding process", "SMAW (manual metal arc)"),
+    ("Joint design", "Single-V butt, 60 degree included angle, 2 mm root gap, 1.5 mm root face"),
+    ("Base metal", "IS 2062 E250 BR"),
+    ("Thickness range qualified", "10 mm to 25 mm"),
+    ("Filler metal", "AWS A5.1 E7018, 3.15 mm and 4.0 mm"),
+    ("Positions", "1G (PA) and 2G (PC)"),
+    ("Minimum preheat", "50 C"),
+    ("Maximum interpass temperature", "250 C"),
+    ("Post-weld heat treatment", "None"),
+    ("Electrode baking", "300 to 350 C for 2 hours, then held at 100 to 150 C in a holding oven"),
+]:
+    row = t.add_row()
+    row.cells[0].text, row.cells[1].text = label, value
+d.add_heading("Table 2: Welding parameters", level=2)
+t = d.add_table(rows=1, cols=5)
+for cell, text in zip(t.rows[0].cells, ["Pass", "Electrode (mm)", "Current (A)", "Voltage (V)", "Travel speed (mm/min)"]):
+    cell.text = text
+for values in [("Root", "3.15", "90-110", "21-23", "80-100"),
+               ("Fill", "4.0", "140-170", "22-25", "120-160"),
+               ("Cap", "4.0", "140-165", "22-24", "130-170")]:
+    row = t.add_row()
+    for cell, text in zip(row.cells, values):
+        cell.text = text
+d.add_heading("Inspection", level=2)
+d.add_paragraph("All welds receive 100 percent visual inspection. The root pass is back-gouged to sound "
+                "metal before the second-side weld. Arc strikes outside the weld groove are not permitted.")
+d.save(str(OUT / "Sample_WPS-SMAW-017.docx"))
+
 png.unlink(missing_ok=True)  # intermediate used to build the PDF, not a sample
 
 for f in sorted(OUT.glob("*")):

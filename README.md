@@ -5,8 +5,9 @@ get answers that point to the page they came from. Everything runs on your
 own machine: a small local model through Ollama, PostgreSQL with pgvector, and
 your files in a Docker volume. Nothing is sent to a cloud service.
 
-Built for engineers reviewing spec sheets and design docs, not as a
-general chatbot over files.
+Built for welding and fabrication engineers, inspectors and welders working
+to IS, ASME, AWS and ISO codes, reviewing WPS/PQRs, standards, consumable
+datasheets and design documents. It is not a general chatbot over files.
 
 - **Answers tied to pages.** Every claim carries a `[n]` citation. Clicking it
   opens the PDF beside the answer, scrolled to the page, with the cited passage
@@ -20,6 +21,13 @@ general chatbot over files.
   number from the table instead of a paraphrase.
 - **Figures.** Start a question with `diagram:` to get a figure that already
   exists in the documents, or a Mermaid diagram drawn by the model if none matches.
+- **Reference libraries.** Standards, codes and consumable catalogues loaded
+  once by the server operator, readable by every account, and searched
+  alongside each team's own documents (switchable per thread).
+- **Welding calculators.** Arc energy / heat input, carbon equivalent (IIW CE,
+  CET, Pcm) and an EN 1011-2 preheat estimate, computed in code with the
+  formula, reference and validity range shown. The model is told not to do
+  this arithmetic itself.
 - **Project memory.** Facts and decisions from earlier questions in a library
   are distilled and given to the model as context in later threads.
 - **Accounts and shared libraries.** Local sign-in; a library's owner can
@@ -61,6 +69,24 @@ docker compose down -v              # stop and delete ALL data, files and embedd
 ```
 
 API docs are served at http://localhost:3000/api/docs.
+
+## Reference libraries
+
+Load documents everyone on the server should be able to search (standards,
+codes, electrode and wire catalogues) into a read-only reference library:
+
+```bash
+docker compose cp ./standards api:/tmp/standards
+docker compose exec api python -m scripts.load_reference \
+    --name "Welding reference" --description "Codes, standards and consumable data" /tmp/standards
+docker compose exec api python -m scripts.load_reference --list
+docker compose exec api python -m scripts.load_reference --name "Welding reference" --remove
+```
+
+Re-running a load adds new files and skips ones already there. BIS, ASME,
+AWS and ISO documents are licensed: only load copies your organisation may
+share with everyone who has an account. `sample-docs/Sample_WPS-SMAW-017.docx`
+is a fictional WPS for trying this out.
 
 ## Supported files
 
@@ -127,12 +153,14 @@ Build a set from your own documents before trusting the numbers.
 | `RETRIEVAL_CANDIDATES` / `RETRIEVAL_TOP_K` | `12` / `5` | Fused candidates reranked, and passages kept |
 | `RERANK_ENABLED` | `true` | `false` is faster, but grounding then never reads "strong" |
 | `MEMORY_ENABLED` | `true` | Distil questions into library memory |
+| `DOMAIN_CONTEXT` | welding text | Who answers are for; added to the prompt. Empty string for a general document tool |
 | `REGISTRATION_ENABLED` | `true` | Turn off once everyone has an account |
 
 ## Limits
 
 - Small local models make mistakes. Check citations, especially when
-  grounding reads partial or weak.
+  grounding reads partial or weak. Nothing here replaces a qualified WPS or
+  the governing code; calculator results are estimates to check against them.
 - Table extraction handles typical spec tables; merged-cell and nested tables
   are not reliably flattened. Non-English documents are untested.
 - Keep it bound to localhost (the default) unless you put it behind TLS.

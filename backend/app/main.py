@@ -1,25 +1,23 @@
-import hashlib
 import logging
-import mimetypes
-import re
 from pathlib import Path
 from typing import Annotated
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
-from psycopg.errors import UniqueViolation
 
-from app import llm, memory
+from app import llm, memory, welding
 from app.config import settings
 from app.db import connection, initialize_database
 from app.ingestion import SUPPORTED_EXTENSIONS
 from app.retrieval import history_for_chat
-from app.security import COOKIE_NAME, User, create_token, hash_password, jwt_secret, require_kb_access, verify_password
-from app.storage import remove_document_files
+from app.security import (
+    COOKIE_NAME, User, create_token, hash_password, jwt_secret, require_kb_access, require_kb_write, verify_password,
+)
+from app.storage import remove_document_files, store_document
 from app.streaming import answer_stream, diagram_request, diagram_stream
 
 logging.basicConfig(level=logging.INFO)
@@ -58,15 +56,43 @@ class MemberInput(BaseModel):
 class ChatInput(BaseModel):
     title: str | None = Field(default=None, max_length=120)
     knowledge_base_id: UUID | None = None
+    use_reference: bool = True
 
 
 class ChatUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=120)
     knowledge_base_id: UUID | None = None
+    use_reference: bool | None = None
 
 
 class MessageInput(BaseModel):
     content: str = Field(min_length=1, max_length=12000)
+
+
+class HeatInputBody(BaseModel):
+    voltage: float = Field(gt=0, le=100)
+    current: float = Field(gt=0, le=2500)
+    travel_speed_mm_min: float = Field(gt=0, le=20000)
+    process: str = Field(min_length=2, max_length=8)
+
+
+class CompositionBody(BaseModel):
+    C: float = Field(ge=0, le=5)
+    Mn: float = Field(ge=0, le=30)
+    Si: float = Field(default=0, ge=0, le=10)
+    Cr: float = Field(default=0, ge=0, le=30)
+    Mo: float = Field(default=0, ge=0, le=10)
+    V: float = Field(default=0, ge=0, le=10)
+    Ni: float = Field(default=0, ge=0, le=30)
+    Cu: float = Field(default=0, ge=0, le=10)
+    B: float = Field(default=0, ge=0, le=1)
+
+
+class PreheatBody(BaseModel):
+    cet: float = Field(gt=0, le=2)
+    thickness_mm: float = Field(gt=0, le=500)
+    hydrogen_ml_100g: float = Field(gt=0, le=100)
+    heat_input_kj_mm: float = Field(gt=0, le=20)
 
 
 def _set_session(response: JSONResponse, user_id: str) -> JSONResponse:
@@ -138,10 +164,13 @@ def me(user: dict = User):
 def list_knowledge_bases(user: dict = User):
     with connection() as conn:
         rows = conn.execute(
-            """SELECT kb.id,kb.name,kb.description,kb.created_at,m.role,
+            """SELECT kb.id,kb.name,kb.description,kb.created_at,kb.is_reference,
+                      COALESCE(m.role, 'reader') AS role,
                       (SELECT count(*) FROM documents d WHERE d.knowledge_base_id=kb.id) AS document_count
-               FROM knowledge_bases kb JOIN kb_members m ON m.kb_id=kb.id
-               WHERE m.user_id=%s ORDER BY kb.created_at DESC""",
+               FROM knowledge_bases kb
+               LEFT JOIN kb_members m ON m.kb_id=kb.id AND m.user_id=%s
+               WHERE m.user_id IS NOT NULL OR kb.is_reference
+               ORDER BY kb.is_reference, kb.created_at DESC""",
             (user["id"],),
         ).fetchall()
     return {"knowledge_bases": rows}
@@ -206,7 +235,7 @@ def list_memory(kb_id: UUID, user: dict = User):
 
 @app.delete("/api/knowledge-bases/{kb_id}/memory/{entry_id}")
 def delete_memory_entry(kb_id: UUID, entry_id: int, user: dict = User):
-    require_kb_access(user["id"], str(kb_id))
+    require_kb_write(user["id"], str(kb_id))
     with connection() as conn:
         deleted = conn.execute(
             "DELETE FROM memory_entries WHERE id=%s AND knowledge_base_id=%s RETURNING id", (entry_id, kb_id)
@@ -230,8 +259,6 @@ def _document_row(row: dict) -> dict:
 def _save_uploads(files: list[UploadFile], user_id: UUID, kb_id: UUID | None = None, chat_id: UUID | None = None) -> list[dict]:
     if not files:
         raise HTTPException(status_code=400, detail="Choose at least one file")
-    upload_dir = Path(settings.upload_dir)
-    upload_dir.mkdir(parents=True, exist_ok=True)
     saved = []
     for upload in files:
         original_name = Path(upload.filename or "document").name
@@ -243,43 +270,14 @@ def _save_uploads(files: list[UploadFile], user_id: UUID, kb_id: UUID | None = N
             raise HTTPException(status_code=400, detail=f"{original_name} is empty")
         if len(content) > settings.max_upload_mb * 1024 * 1024:
             raise HTTPException(status_code=413, detail=f"{original_name} exceeds {settings.max_upload_mb} MB")
-        digest = hashlib.sha256(content).hexdigest()
-        if kb_id:
-            with connection() as conn:
-                duplicate = conn.execute(
-                    "SELECT id FROM documents WHERE knowledge_base_id=%s AND sha256=%s", (kb_id, digest)
-                ).fetchone()
-            if duplicate:
-                saved.append({"id": duplicate["id"], "filename": original_name, "status": "duplicate"})
-                continue
-        document_id = uuid4()
-        safe_suffix = re.sub(r"[^a-zA-Z0-9.]", "", extension)
-        storage_path = upload_dir / f"{document_id}{safe_suffix}"
-        storage_path.write_bytes(content)
-        content_type = upload.content_type or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
-        try:
-            with connection() as conn:
-                row = conn.execute(
-                    """INSERT INTO documents(id,knowledge_base_id,conversation_id,uploaded_by,filename,content_type,
-                       byte_size,sha256,storage_path) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
-                    (document_id, kb_id, chat_id, user_id, original_name, content_type, len(content), digest, str(storage_path)),
-                ).fetchone()
-                conn.execute("INSERT INTO ingestion_jobs(document_id) VALUES(%s)", (document_id,))
-                conn.commit()
-            saved.append(_document_row(row))
-        except UniqueViolation:
-            # the same file landed in this knowledge base concurrently, after the check above
-            storage_path.unlink(missing_ok=True)
-            saved.append({"id": None, "filename": original_name, "status": "duplicate"})
-        except Exception:
-            storage_path.unlink(missing_ok=True)
-            raise
+        row = store_document(content, original_name, upload.content_type, kb_id=kb_id, chat_id=chat_id, user_id=user_id)
+        saved.append(row if row.get("status") == "duplicate" else _document_row(row))
     return saved
 
 
 @app.post("/api/knowledge-bases/{kb_id}/documents", status_code=202)
 def upload_to_knowledge_base(kb_id: UUID, files: Annotated[list[UploadFile], File()], user: dict = User):
-    require_kb_access(user["id"], str(kb_id))
+    require_kb_write(user["id"], str(kb_id))
     return {"documents": _save_uploads(files, user["id"], kb_id=kb_id)}
 
 
@@ -320,8 +318,8 @@ def create_chat(body: ChatInput, user: dict = User):
         require_kb_access(user["id"], str(body.knowledge_base_id))
     with connection() as conn:
         chat = conn.execute(
-            "INSERT INTO chats(user_id,title,knowledge_base_id) VALUES(%s,%s,%s) RETURNING *",
-            (user["id"], body.title or "New chat", body.knowledge_base_id),
+            "INSERT INTO chats(user_id,title,knowledge_base_id,use_reference) VALUES(%s,%s,%s,%s) RETURNING *",
+            (user["id"], body.title or "New chat", body.knowledge_base_id, body.use_reference),
         ).fetchone()
         conn.commit()
     return {"chat": chat}
@@ -357,9 +355,10 @@ def update_chat(chat_id: UUID, body: ChatUpdate, user: dict = User):
     )
     with connection() as conn:
         chat = conn.execute(
-            """UPDATE chats SET title=COALESCE(%s,title), knowledge_base_id=%s, updated_at=now()
+            """UPDATE chats SET title=COALESCE(%s,title), knowledge_base_id=%s,
+                   use_reference=COALESCE(%s,use_reference), updated_at=now()
                WHERE id=%s RETURNING *""",
-            (body.title, knowledge_base_id, chat_id),
+            (body.title, knowledge_base_id, body.use_reference, chat_id),
         ).fetchone()
         conn.commit()
     return {"chat": chat}
@@ -430,6 +429,28 @@ def get_figure(figure_id: int, user: dict = User):
         raise HTTPException(status_code=404, detail="Figure not found")
     _visible_document(figure["document_id"], user)
     return FileResponse(figure["image_path"], media_type=figure["media_type"])
+
+
+def _calculate(function, body: BaseModel) -> dict:
+    try:
+        return function(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/calc/heat-input")
+def calc_heat_input(body: HeatInputBody, user: dict = User):
+    return _calculate(welding.heat_input, body)
+
+
+@app.post("/api/calc/carbon-equivalent")
+def calc_carbon_equivalent(body: CompositionBody, user: dict = User):
+    return _calculate(welding.carbon_equivalent, body)
+
+
+@app.post("/api/calc/preheat")
+def calc_preheat(body: PreheatBody, user: dict = User):
+    return _calculate(welding.preheat_cet, body)
 
 
 @app.post("/api/chats/{chat_id}/messages")

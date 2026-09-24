@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     rerank_enabled: bool = True
     # Set false to stop distilling chat exchanges into knowledge-base memory.
     memory_enabled: bool = True
+    # Who the answers are for; added to the answer prompt. Set DOMAIN_CONTEXT to
+    # retarget the assistant, or to an empty string for a general document tool.
+    domain_context: str = (
+        "The readers are welding and fabrication engineers, inspectors and welders, mostly working to "
+        "Indian (IS), ASME, AWS and ISO codes. Use SI units (mm, kJ/mm, °C, MPa) and give the imperial value "
+        "only when the source uses it. When an excerpt comes from a code or standard, name the document and "
+        "clause. Never present a welding parameter, limit or classification as fact unless the excerpts state "
+        "it. Do not calculate heat input, carbon equivalent or preheat yourself; point the reader to the "
+        "Calculators page instead."
+    )
     ollama_timeout_seconds: int = 180
 
 

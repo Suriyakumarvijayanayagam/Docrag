@@ -36,8 +36,9 @@ def diagram_request(content: str) -> str | None:
     return content[match.end():].strip() or None
 
 
-def _scope(chat: dict) -> tuple[str | None, str]:
-    return (str(chat["knowledge_base_id"]) if chat["knowledge_base_id"] else None, str(chat["id"]))
+def _scope(chat: dict) -> tuple[str | None, str, bool]:
+    return (str(chat["knowledge_base_id"]) if chat["knowledge_base_id"] else None, str(chat["id"]),
+            bool(chat.get("use_reference")))
 
 
 def _save_assistant(chat_id, content: str, sources: list[dict], confidence: str | None, diagram: dict | None) -> dict:
@@ -54,9 +55,9 @@ def _save_assistant(chat_id, content: str, sources: list[dict], confidence: str 
 
 
 def answer_stream(chat: dict, query: str, history: list[dict]):
-    knowledge_base_id, chat_id = _scope(chat)
+    knowledge_base_id, chat_id, use_reference = _scope(chat)
     try:
-        prepared = prepare(query, knowledge_base_id, chat_id, history)
+        prepared = prepare(query, knowledge_base_id, chat_id, history, use_reference)
     except Exception:
         logger.exception("Retrieval failed")
         yield sse("error", {"message": "Could not search your documents. " + MODEL_UNAVAILABLE})
@@ -86,9 +87,9 @@ def answer_stream(chat: dict, query: str, history: list[dict]):
 
 def diagram_stream(chat: dict, request: str):
     """An existing figure from the documents when one matches; otherwise generated Mermaid."""
-    knowledge_base_id, chat_id = _scope(chat)
+    knowledge_base_id, chat_id, use_reference = _scope(chat)
     try:
-        figure = best_figure(request, figures_in_scope(knowledge_base_id, chat_id))
+        figure = best_figure(request, figures_in_scope(knowledge_base_id, chat_id, use_reference))
         if figure:
             sources: list[dict] = []
             diagram = {
@@ -98,7 +99,7 @@ def diagram_stream(chat: dict, request: str):
             }
             content = f"Found an existing figure in {figure['filename']} ({figure['locator']}): {figure['caption']}"
         else:
-            candidates = retrieve(request, knowledge_base_id, chat_id, limit=6)
+            candidates = retrieve(request, knowledge_base_id, chat_id, 6, use_reference)
             sources = public_sources(build_sources(candidates, []))
             mermaid = generate_mermaid("\n\n".join(candidate["content"] for candidate in candidates), request)
             diagram = {"kind": "mermaid", "mermaid": mermaid, "source": "generated"}

@@ -89,15 +89,28 @@ def current_user(request: Request) -> dict:
 
 
 def require_kb_access(user_id: str, kb_id: str) -> dict:
+    """
+    The library, with the caller's role: 'owner' or 'member' for libraries they
+    belong to, 'reader' for reference libraries (readable by every account).
+    """
     with connection() as conn:
         row = conn.execute(
-            """SELECT kb.*, m.role FROM knowledge_bases kb
-               JOIN kb_members m ON m.kb_id = kb.id
-               WHERE kb.id = %s AND m.user_id = %s""",
-            (kb_id, user_id),
+            """SELECT kb.*, COALESCE(m.role, CASE WHEN kb.is_reference THEN 'reader' END) AS role
+               FROM knowledge_bases kb
+               LEFT JOIN kb_members m ON m.kb_id = kb.id AND m.user_id = %s
+               WHERE kb.id = %s AND (m.user_id IS NOT NULL OR kb.is_reference)""",
+            (user_id, kb_id),
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Knowledge base not found")
+    return row
+
+
+def require_kb_write(user_id: str, kb_id: str) -> dict:
+    """Same as require_kb_access, but refuses readers of reference libraries."""
+    row = require_kb_access(user_id, kb_id)
+    if row["role"] == "reader":
+        raise HTTPException(status_code=403, detail="Reference libraries are read-only")
     return row
 
 

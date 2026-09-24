@@ -77,6 +77,11 @@ def distill_exchange(knowledge_base_id, chat_id, question: str, answer: str) -> 
             return
         entry_type = parsed.get("entry_type") if parsed.get("entry_type") in ENTRY_TYPES else "fact"
         with connection() as conn:
+            # a reference library is shared by every account, so one user's
+            # conversation must never write into it
+            library = conn.execute("SELECT is_reference FROM knowledge_bases WHERE id=%s", (knowledge_base_id,)).fetchone()
+            if not library or library["is_reference"]:
+                return
             conn.execute(
                 """INSERT INTO memory_entries(knowledge_base_id, entry_type, content, source_chat_id)
                    VALUES(%s, %s, %s, %s)""",

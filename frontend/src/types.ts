@@ -1,10 +1,14 @@
 export type User = { id: string; email: string; display_name: string }
 export type KnowledgeBase = {
   id: string; name: string; description: string; role?: string; document_count?: number
+  /** readable by every account; loaded by the server operator */
+  is_reference?: boolean
 }
 export type Chat = {
   id: string; title: string; knowledge_base_id: string | null; knowledge_base_name?: string | null
   first_message?: string | null; updated_at: string
+  /** also search the reference libraries */
+  use_reference?: boolean
 }
 export type Document = {
   id: string; filename: string; content_type?: string; byte_size?: number; status: string

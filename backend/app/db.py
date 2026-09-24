@@ -149,6 +149,15 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS memory_entries_kb_idx ON memory_entries(knowledge_base_id, created_at);
+
+-- Reference libraries (standards, codes, catalogues) are loaded by the server
+-- operator with scripts/load_reference.py and readable by every account. They
+-- have no owner and their documents no uploader.
+ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS is_reference BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE knowledge_bases ALTER COLUMN created_by DROP NOT NULL;
+ALTER TABLE documents ALTER COLUMN uploaded_by DROP NOT NULL;
+-- Whether a thread also searches the reference libraries.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS use_reference BOOLEAN NOT NULL DEFAULT true;
 """
 
 # Bump whenever extraction changes in a way existing documents should pick up

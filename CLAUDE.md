@@ -4,8 +4,9 @@ Read this first, every session. `docs/ARCHITECTURE.md` has the full flow.
 
 ## What this is
 
-A self-hosted document question-answering tool for engineers reviewing
-datasheets, specs and design docs. Answers cite the page each claim comes
+A self-hosted document question-answering tool for welding and fabrication
+engineers in India (IS / ASME / AWS / ISO codes), reviewing WPS/PQRs,
+standards, consumable datasheets and design docs. Answers cite the page each claim comes
 from, keep the model's own reasoning visibly separate, and report how well
 grounded they are. Runs on a small local model (~3B) via Ollama; nothing
 leaves the machine.
@@ -22,12 +23,14 @@ the old code is in git history before the merge commit.
   - `reranker.py` · `facts.py` table values · `figures.py` figures + Mermaid · `memory.py`
   - `ingestion.py` text extraction · `chunking.py` · `worker.py` background indexing
   - `llm.py` the only module that calls Ollama · `db.py` schema + migrations
-  - `security.py` auth, JWT secret · `storage.py` files on disk
+  - `security.py` auth, JWT secret, library roles · `storage.py` storing uploads, files on disk
+  - `welding.py` heat input, carbon equivalent, preheat (pure functions)
 - `backend/tests/` — pytest unit tests; `fake_ollama.py` stand-in model
-- `backend/scripts/` — `eval_retrieval.py`, `make_sample_docs.py`
+- `backend/scripts/` — `load_reference.py` (operator loads reference libraries),
+  `eval_retrieval.py`, `make_sample_docs.py`
 - `frontend/src/` — Vite + React 18 + TS. `App.tsx` (workspace state and
   views), `components/` (AnswerBody, PdfViewer, DiagramCard, MemoryPanel,
-  Dialog, Logo), `styles.css` (single stylesheet, tokens + dark mode)
+  Calculators, Dialog, Logo), `styles.css` (single stylesheet, tokens + dark mode)
 - `compose.yaml` postgres, api, worker, web · `compose.fake-llm.yaml` swaps in the fake model
 - `sample-docs/` fixtures used by the eval set
 
@@ -74,6 +77,14 @@ the image: `docker run --rm -v "$PWD":/src -w /src -u root <api image> sh -c
 10. **JWT secret**: blank or placeholder values are replaced by a generated
     secret stored at `$UPLOAD_DIR/.jwt_secret`.
 11. **nginx must serve `.mjs` as JavaScript** or the pdf.js worker fails to load.
+12. **Reference libraries** (`knowledge_bases.is_reference`) have no owner or
+    members; everyone gets the virtual role `reader`. Anything that writes to
+    a library must go through `security.require_kb_write`, and memory must
+    never be written into a reference library.
+13. **Welding numbers come from `welding.py`, never the model.** The domain
+    prompt (`settings.domain_context`) tells the model not to calculate. Any
+    new formula needs its reference, validity range and a test with a
+    hand-checked value.
 
 ## Conventions
 
@@ -88,9 +99,19 @@ the image: `docker run --rm -v "$PWD":/src -w /src -u root <api image> sh -c
 - The Postgres database and user are still named `localrag`/`rag`; renaming
   them would orphan existing volumes.
 
+## Welding content
+
+No standards ship with the repo: BIS/ASME/AWS/ISO documents are licensed and
+must be supplied by the user. `sample-docs/Sample_WPS-SMAW-017.docx` is a
+fictional WPS for testing. Don't add real standards text to the repo or state
+code requirements from memory in prompts or UI copy.
+
 ## Known gaps
 
 - Answer quality has only been checked against the fake model; run the eval
   set against `qwen2.5:3b` with real documents.
 - Full-text search has no stemming (`simple` config).
 - No per-member roles beyond owner/member; no audit log.
+- Planned welding work not yet built: a WPS/PQR checker against code limits,
+  calculator results usable inside answers, and an eval set from real
+  welding questions and documents.
