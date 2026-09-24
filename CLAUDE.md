@@ -1,144 +1,96 @@
-# DocRAG — Project Memory for Claude Code
+# Datum — Project Memory for Claude Code
 
-Read this first, every session. See `docs/ARCHITECTURE.md` for the full
-stack/flow explanation if more depth is needed.
+Read this first, every session. `docs/ARCHITECTURE.md` has the full flow.
 
 ## What this is
 
-A standalone, self-hosted, multi-tenant document intelligence system.
-Upload PDF/DOCX, ask technical questions, get answers grounded in the
-documents (kept visibly separate from AI-added insight), generate or find
-diagrams. Runs on a small local LLM (~2-3B params) via Ollama — nothing
-leaves the machine, no cloud API calls for inference.
+A self-hosted document question-answering tool for engineers reviewing
+datasheets, specs and design docs. Answers cite the page each claim comes
+from, keep the model's own reasoning visibly separate, and report how well
+grounded they are. Runs on a small local model (~3B) via Ollama; nothing
+leaves the machine.
 
-Target user: a technical/engineering audience reviewing spec sheets, design
-docs, datasheets. Not a generic chatbot-over-files product.
+Previously two codebases (DocRAG: Chroma/SQLite/Next.js; LocalRAG:
+Postgres/auth/Vite). They were merged in Sept 2026 on DocRAG 2's foundation;
+the old code is in git history before the merge commit.
 
-## Stack
+## Layout
 
-- **App layer:** FastAPI (`app/main.py`)
-- **Model layer:** Ollama, running separately (`localhost:11434` by default)
-  - LLM: `qwen2.5:3b` (configurable in `app/config.py`)
-  - Embeddings: `nomic-embed-text`
-- **Storage:** all local
-  - ChromaDB — one physical collection per `(user_id, project_id)` — see Isolation below
-  - SQLite — structured facts, figures, persistent project memory (`data/memory.sqlite3`)
-  - Filesystem — uploaded originals + extracted figure images
-- **Frontend:** two, both served by FastAPI itself
-  - `frontend-next/` — the console. Next.js 16 + React 19 + Tailwind 4,
-    TypeScript. Static export (`output: "export"`, `basePath: "/ui"`), so there
-    is still only one process at runtime: `npm run build` writes
-    `frontend-next/out`, FastAPI mounts it at `/ui`. Split view: the PDF itself
-    on the left (pdf.js via react-pdf), chat on the right, and citations that
-    scroll the viewer to the cited page and highlight the passage there. The
-    highlight works because `/ask` returns each source's `snippet` (the
-    retrieved chunk, capped at `query_pipeline.SNIPPET_CHARS`); the viewer
-    tests each pdf.js text run for membership in that chunk rather than trying
-    to locate the chunk in the page. Mermaid and the pdf.js worker are both
-    bundled/self-hosted — nothing leaves the machine, and both work offline.
-    The worker lives at `frontend-next/public/pdf.worker.min.mjs`, copied from
-    `node_modules/pdfjs-dist/build/` — re-copy it after upgrading pdfjs-dist.
-    `PdfViewer` is imported via `next/dynamic` with `ssr: false`; pdf.js touches
-    `DOMMatrix` at module scope and breaks the static prerender otherwise.
-    Four exported routes (`/`, `/chat`, `/library`, `/memory`) with workspace
-    state in `WorkspaceProvider` in the root layout - keep new shared state
-    there, not in a page, or it resets on every navigation. `trailingSlash` is
-    on, so links must end in `/`; FastAPI 307s the un-slashed form.
-  - `frontend/index.html` — the original single-file UI, kept as a no-build
-    fallback and served at `/ui-basic`. If `frontend-next/out` is missing,
-    `/ui` falls back to this one rather than 404ing.
+- `backend/app/` — FastAPI (Python 3.10+, image uses 3.12)
+  - `main.py` routes · `streaming.py` SSE answer/diagram streams
+  - `answer.py` pipeline + prompt + confidence · `retrieval.py` hybrid search, scope, spreadsheet counts
+  - `reranker.py` · `facts.py` table values · `figures.py` figures + Mermaid · `memory.py`
+  - `ingestion.py` text extraction · `chunking.py` · `worker.py` background indexing
+  - `llm.py` the only module that calls Ollama · `db.py` schema + migrations
+  - `security.py` auth, JWT secret · `storage.py` files on disk
+- `backend/tests/` — pytest unit tests; `fake_ollama.py` stand-in model
+- `backend/scripts/` — `eval_retrieval.py`, `make_sample_docs.py`
+- `frontend/src/` — Vite + React 18 + TS. `App.tsx` (workspace state and
+  views), `components/` (AnswerBody, PdfViewer, DiagramCard, MemoryPanel,
+  Dialog, Logo), `styles.css` (single stylesheet, tokens + dark mode)
+- `compose.yaml` postgres, api, worker, web · `compose.fake-llm.yaml` swaps in the fake model
+- `sample-docs/` fixtures used by the eval set
 
-## Run it
+## Run
 
 ```bash
-ollama pull qwen2.5:3b
-ollama pull nomic-embed-text
-pip install -r requirements.txt
-
-# console (only needed after changing frontend-next/)
-cd frontend-next && npm install && npm run build && cd ..
-
-uvicorn app.main:app --reload
+cp .env.example .env && docker compose up --build   # http://localhost:3000
+docker compose -f compose.yaml -f compose.fake-llm.yaml up --build   # no model needed
+cd backend && python -m pytest                      # unit tests (needs 3.10+)
 ```
 
-Console: `http://localhost:8000/ui`
-Fallback UI: `http://localhost:8000/ui-basic`
-API docs: `http://localhost:8000/docs`
+The host's system Python is 3.9, which can't run the backend. Run tests in
+the image: `docker run --rm -v "$PWD":/src -w /src -u root <api image> sh -c
+"pip install -q pytest && python -m pytest"` from `backend/`.
 
-Iterating on the console: `cd frontend-next && npm run dev` serves it at
-`http://localhost:3000/ui` with hot reload. It needs the backend's origin,
-so create `frontend-next/.env.local` with
-`NEXT_PUBLIC_API_BASE=http://localhost:8000`. Leave that unset for the
-static build — same-origin is correct when FastAPI serves it.
+## Non-obvious decisions (don't "fix" these without asking)
 
-**Python 3.10+ is not assumed.** The codebase runs on 3.9, so use
-`Optional[X]` / `Union[X, Y]` rather than `X | None` in annotations that get
-evaluated at runtime (Pydantic models especially).
-
-## Non-obvious design decisions (don't "fix" these without asking)
-
-1. **Multi-tenant isolation is physical, not filtered.** Every user/project
-   pair gets its own Chroma collection (`app/core/vectorstore.py:_collection_name`).
-   There is intentionally no query path that spans collections. If you're
-   tempted to add a "search across all projects" feature, that needs a new
-   explicit function, not a loosened filter on the existing one.
-
-2. **Reranker is LLM-prompted, not a cross-encoder** (`app/core/reranker.py`).
-   Deliberate — avoids a torch dependency to keep the whole stack installable
-   in seconds. Swap in `bge-reranker-base` only if answer quality demands it;
-   the `rerank(query, candidates, top_k)` interface is designed not to change.
-
-3. **Hybrid retrieval = vector (Chroma) + BM25, fused with Reciprocal Rank
-   Fusion** (`app/core/hybrid_search.py`). BM25 index is rebuilt from the full
-   tenant collection on every query — fine at prototype scale, needs caching
-   or a proper hybrid vector store (Qdrant/Weaviate) past a few thousand
-   chunks per project.
-
-4. **Structured facts and figures are separate SQLite tables**, not part of
-   the RAG chunk flow (`app/core/structured_facts.py`, `app/core/figures.py`).
-   Table data gets exact lookups instead of fuzzy semantic search. Figures
-   already in source docs are extracted and preferred over LLM-generated
-   Mermaid diagrams (`app/core/diagram.py`) — only generate a new diagram if
-   nothing existing matches.
-
-5. **Memory is LLM-distilled, not raw logging** (`app/core/memory_distill.py`).
-   Every Q&A exchange gets summarized down to "worth remembering or not" —
-   don't revert to logging raw questions, it makes the memory block noisy
-   over a long project.
-
-6. **Confidence score comes from the reranker's own relevance scores**
-   (`app/core/query_pipeline.py:_confidence_label`), not from vector distance.
-   high ≥7, medium ≥4, else low, on the 0-10 LLM-assigned scale.
-
-## Known gaps (expected next work, not bugs)
-
-- No auth layer — `user_id` is client-supplied. Fine for local/prototype use,
-  not for anything exposed beyond localhost.
-- `scripts/eval_set_example.json` has only 2 toy cases — build a real eval
-  set from actual test documents before trusting the hit-rate numbers.
-- Reranker and structured-fact-extraction heuristics are both "good enough
-  for typical technical docs," not exhaustive — complex nested/merged-cell
-  tables and non-English documents haven't been tested.
-
-## Testing without a live model
-
-`tests/mock_llm.py` implements the same interface as `OllamaClient`
-(`embed`, `embed_batch`, `chat`, `chat_stream`) with deterministic
-template/hash-based responses. Useful for exercising the full pipeline
-(ingestion → retrieval → fusion → facts → figures → confidence → memory)
-without needing Ollama running. Not meant to validate answer *quality* —
-only that data flows correctly end to end.
+1. **Retrieval scope is one SQL fragment.** `retrieval.SCOPE_SQL` limits every
+   query to ready documents in the chat's library plus the chat's own
+   attachments. Any new retrieval query must use it; the API checks library
+   membership before retrieval runs.
+2. **Every per-document table cascades from `documents`.** Chunks, table
+   values and figures use `ON DELETE CASCADE`. Files on disk don't cascade:
+   anything that deletes documents must call `storage.remove_document_files`.
+3. **The reranker is LLM-prompted, not a cross-encoder** (no torch). Its 0-10
+   scores are the grounding signal: strong ≥7, partial ≥4 or an exact table
+   value, else weak. Retrieval-only scores are capped at 6.5 so they can never
+   read "strong". Keep `rerank(query, candidates, top_k)` stable.
+4. **Answers have two parts** (`FROM THE DOCUMENTS` / `ADDITIONAL INSIGHT`);
+   the frontend splits on those headings in `AnswerBody.splitAnswer`. Change
+   both sides together.
+5. **Memory is distilled, per library, and never evidence.** Don't revert to
+   logging raw questions. Distillation runs in a background thread after the
+   answer streams.
+6. **Count/list questions take a different path**: the whole best-matching
+   document (≤24 chunks), no rerank, spreadsheet counts computed in code.
+7. **Existing figures beat generated diagrams**, with strict caption matching
+   (≥2 shared content words).
+8. **Bump `db.PARSER_VERSION`** when extraction output changes; stale
+   documents are re-queued on startup.
+9. **Schema changes go in `db.SCHEMA` as idempotent statements**
+   (`IF NOT EXISTS`); there's no migration tool. Startup takes an advisory
+   lock because api and worker both run it.
+10. **JWT secret**: blank or placeholder values are replaced by a generated
+    secret stored at `$UPLOAD_DIR/.jwt_secret`.
+11. **nginx must serve `.mjs` as JavaScript** or the pdf.js worker fails to load.
 
 ## Conventions
 
-- Every new storage read/write must be scoped by `(user_id, project_id)` —
-  no exceptions, this is the isolation guarantee the whole system depends on.
-- Keep `OllamaClient`'s interface stable (`embed`, `embed_batch`, `chat`,
-  `chat_stream`) — several modules and the mock depend on it staying exactly
-  as-is if the model backend ever changes.
-- New API routes go in `app/api/`, get included in `app/main.py`, and get a
-  matching Pydantic schema in `app/models/schemas.py`.
-- A document exists in three stores — chunks in Chroma, facts and figures in
-  SQLite. Anything that creates or destroys a document must touch all three
-  (see `routes_documents.remove_document`), or deleted documents keep
-  answering questions through the fact/figure fast-paths.
+- Only `llm.py` talks to Ollama; keep `embed`, `embed_query`, `chat`,
+  `chat_stream`, `available` stable (the fake model serves the same endpoints).
+- Model output is untrusted: prompts say so, and every parser of it
+  (scores, memory JSON, Mermaid, PDF text in the highlighter) must tolerate
+  garbage without raising or injecting HTML.
+- UI copy is plain and specific: say what something does, no marketing
+  phrasing, no decorative icons. Numbers, pages and filenames use the mono
+  font. Colours come from the tokens at the top of `styles.css`.
+- The Postgres database and user are still named `localrag`/`rag`; renaming
+  them would orphan existing volumes.
+
+## Known gaps
+
+- Answer quality has only been checked against the fake model; run the eval
+  set against `qwen2.5:3b` with real documents.
+- Full-text search has no stemming (`simple` config).
+- No per-member roles beyond owner/member; no audit log.

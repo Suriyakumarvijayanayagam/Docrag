@@ -1,175 +1,173 @@
-# How DocRAG Works
+# How Datum works
 
-This explains the system in plain terms first, then with technical detail.
-No prior knowledge of RAG or LLMs assumed.
+Plain terms first, then the technical detail. No prior knowledge of RAG or
+LLMs assumed.
 
 ---
 
 ## In one sentence
 
-You upload documents, the system reads and remembers them privately per
-project, and you ask questions — it answers using what's actually in your
-documents (clearly separated from anything the AI adds on its own).
+You put documents into a library; Datum reads them, indexes them on your
+machine, and answers questions using what is actually in them, with every
+claim pointing at its page and anything the model adds kept visibly separate.
 
 ---
 
-## The stack (what's running, and why)
+## What runs
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  YOUR APP (FastAPI)                                      │
-│  Handles uploads, questions, and coordinates everything   │
-├─────────────────────────────────────────────────────────┤
-│  THE MODEL (Ollama, running a small local LLM)            │
-│  Reads text, writes answers, generates diagrams           │
-├─────────────────────────────────────────────────────────┤
-│  STORAGE (all on your machine, nothing sent to the cloud) │
-│  ├─ ChromaDB    → document meaning, for "find related"    │
-│  ├─ SQLite      → exact facts, figures, project memory    │
-│  └─ Filesystem  → the original uploaded files              │
-└─────────────────────────────────────────────────────────┘
+ Browser ──► web (nginx)  ──  serves the React app, forwards /api/*
+                │
+                ▼
+            api (FastAPI) ──  accounts, libraries, threads, questions (streamed)
+                │
+   ┌────────────┼──────────────────────────────┐
+   ▼            ▼                              ▼
+ PostgreSQL   uploads volume              Ollama (native on the host)
+ + pgvector   originals + figure images   chat model + embedding model
+   ▲
+   │
+ worker ──  picks up queued documents: extract → chunk → embed → store
 ```
 
-| Layer | Tool | Plain-English job |
-|---|---|---|
-| App | FastAPI | Traffic controller — routes every request to the right piece of code |
-| Model | Ollama + small LLM (~2-3B params) | The "brain" — reads and writes language |
-| Meaning search | ChromaDB | Finds passages that *mean* the same thing as your question, even with different words |
-| Keyword search | BM25 | Finds passages with the *exact* words from your question (part numbers, model names) |
-| Exact facts | SQLite table | Table data (spec sheets) stored as precise lookups, not fuzzy guesses |
-| Figures | SQLite + file storage | Diagrams already inside your documents, extracted and reused |
-| Project memory | SQLite table | A running, self-editing summary of what's been learned in this project |
+| Piece | Job |
+|---|---|
+| **web** | nginx serving the built frontend; proxies `/api/` to the API with buffering off so answers stream |
+| **api** | FastAPI. Sign-in, access checks, uploads, and the answer pipeline |
+| **worker** | Background indexing, so a 200-page PDF never blocks a request. Retries a failed document up to 3 times |
+| **PostgreSQL + pgvector** | One database for everything: users, libraries, documents, passages and their embeddings, full-text index, table values, figures, memory, threads |
+| **Ollama** | The model, running outside Docker so it can use the Mac's GPU. Only `backend/app/llm.py` talks to it |
+
+Nothing in the stack calls a cloud service at runtime.
 
 ---
 
-## Flow 1 — Uploading a document
+## Who can see what
 
-```
- You upload a PDF or DOCX
-          │
-          ▼
- ┌──────────────────┐
- │ Read the text     │  (page by page for PDF, section by section for DOCX)
- └──────────────────┘
-          │
-          ▼
- ┌──────────────────┐
- │ Split into chunks │  (~700 words each, slightly overlapping so no
- └──────────────────┘   sentence gets cut in half)
-          │
-          ├─────────────────────┬─────────────────────┐
-          ▼                     ▼                     ▼
- ┌────────────────┐   ┌──────────────────┐   ┌──────────────────┐
- │ Turn each chunk │   │ Pull out tables   │   │ Pull out existing│
- │ into a "meaning │   │ as exact facts    │   │ diagrams/images  │
- │ fingerprint"    │   │ (label → value)   │   │ already in the   │
- │ (embedding)     │   │                   │   │ document         │
- └────────────────┘   └──────────────────┘   └──────────────────┘
-          │                     │                     │
-          ▼                     ▼                     ▼
- ┌────────────────┐   ┌──────────────────┐   ┌──────────────────┐
- │   ChromaDB      │   │  SQLite (facts)  │   │  SQLite (figures)│
- │  (this project  │   │  (this project   │   │  (this project   │
- │   only)         │   │   only)          │   │   only)          │
- └────────────────┘   └──────────────────┘   └──────────────────┘
-```
+Every document belongs to exactly one of:
 
-**The important part:** every one of those three storage boxes is scoped to
-*one specific user and one specific project*. There is no query in the whole
-system that can reach across that boundary — User A's documents are
-physically stored separately from User B's, not just hidden behind a filter
-that could someday be forgotten.
+- a **library** (knowledge base), visible to its members, or
+- a **thread**, as an attachment, visible only to the thread's owner.
+
+A question searches the thread's library plus the thread's own attachments,
+nothing else. That scope is one SQL fragment (`retrieval.SCOPE_SQL`) used by
+every retrieval query, and the API checks membership before retrieval runs.
+Table values, figures and passages all hang off `documents` with
+`ON DELETE CASCADE`, so deleting a document removes everything indexed from
+it; the files on disk are removed by `storage.remove_document_files`.
+
+Library owners can invite other accounts, delete the library, and remove any
+document. Members can read, ask, upload, and remove what they uploaded.
 
 ---
 
-## Flow 2 — Asking a question
+## Flow 1: adding a document
 
 ```
- You ask: "what's the max voltage of the regulator?"
-          │
-          ▼
- ┌─────────────────────────┐
- │ Check exact facts first  │  → if it's a spec/number question, this
- │ (fast path)               │    often already has the precise answer
- └─────────────────────────┘
-          │
-          ▼
- ┌─────────────────────────┐
- │ Search two ways at once  │
- │ ┌───────────┐ ┌────────┐ │
- │ │  Meaning   │ │Keyword │ │  → combined, because meaning-search alone
- │ │  search    │ │ search │ │    can miss exact terms, and keyword-search
- │ └───────────┘ └────────┘ │    alone can miss reworded questions
- └─────────────────────────┘
-          │
-          ▼
- ┌─────────────────────────┐
- │ If comparing multiple    │
- │ documents, make sure     │  → e.g. "compare X vs Y" pulls from both
- │ each one is represented  │    documents, not just whichever scored highest
- └─────────────────────────┘
-          │
-          ▼
- ┌─────────────────────────┐
- │ Re-rank what was found   │  → double-check which passages are actually
- │ for real relevance        │    relevant, and score confidence: high/medium/low
- └─────────────────────────┘
-          │
-          ▼
- ┌─────────────────────────┐
- │ The model writes the     │  → answer is split into two clearly labeled
- │ answer                    │    parts: what the documents say, vs. what the
- │                            │    AI is adding on top
- └─────────────────────────┘
-          │
-          ▼
- ┌─────────────────────────┐
- │ Was this worth            │  → the model decides if anything from this
- │ remembering?               │    exchange should become permanent project
- │                            │    memory (not every question is - keeps it
- │                            │    from getting cluttered over time)
- └─────────────────────────┘
-          │
-          ▼
-   Answer + sources + confidence level, shown to you
+ Upload (PDF, DOCX, PPTX, XLSX, MD, TXT, HTML, image)
+   │   saved under a random name; SHA-256 checked for duplicates in the library
+   ▼
+ Queued job  ──►  worker claims it (FOR UPDATE SKIP LOCKED)
+                    │
+        ┌───────────┼─────────────────────┬──────────────────────┐
+        ▼           ▼                     ▼                      ▼
+   Extract text   Tables → exact         Embedded images →     (OCR for image-only
+   with page and  label/value pairs      figure files,          pages and images)
+   heading info   ("Vin.Max" → "40 V")   captioned from the
+        │                                page text
+        ▼
+   Chunk (~420 tokens, overlap 60; spreadsheet rows kept whole)
+        │
+        ▼
+   Embed each chunk (Ollama)  ──►  one transaction writes passages,
+                                   table values and figures, then marks the
+                                   document Ready
 ```
+
+If table or figure extraction fails, the document still indexes its text.
+When extraction changes, `db.PARSER_VERSION` is bumped and existing documents
+are re-indexed on the next start.
 
 ---
 
-## Flow 3 — Asking for a diagram
+## Flow 2: asking a question
 
 ```
- You ask: "show me the block diagram of the power subsystem"
-          │
-          ▼
- ┌─────────────────────────┐
- │ Does a matching diagram   │
- │ already exist in the      │  → prefer the real thing already in your
- │ uploaded documents?       │    documents over an invented one
- └─────────────────────────┘
-          │
-     ┌────┴────┐
-    yes        no
-     │          │
-     ▼          ▼
- Return the   Ask the model to generate one as text-based
- real image   diagram code (Mermaid), rendered as a diagram
- + its page   in your browser — because a small model is
- reference    good at writing structured text, not at
-              actually drawing pixels
+ "What is the thermal shutdown temperature of the PC-42?"
+   │
+   ├─► Exact table values whose labels share the most words with the question
+   │
+   ├─► Hybrid search, top 12
+   │     meaning (pgvector cosine)  +  exact words (PostgreSQL full text)
+   │     fused with Reciprocal Rank Fusion, weighted 0.7 / 0.3
+   │
+   ├─► "Compare X and Y"?  interleave documents so each one is represented
+   │
+   ├─► Rerank: the model scores each passage 0-10; keep the best 5
+   │     grounding = strong (best ≥ 7) · partial (≥ 4, or an exact table value)
+   │                 · weak · none
+   │
+   ├─► Prompt = instructions + library memory + numbered passages and values
+   │     the model must answer in two parts:
+   │       FROM THE DOCUMENTS   every claim cited [n]
+   │       ADDITIONAL INSIGHT   its own reasoning, uncited
+   │
+   ├─► Stream to the browser: sources → tokens → saved message
+   │
+   └─► After the answer: distil it into one memory entry, or nothing
 ```
+
+Count and list questions ("how many rows", "list all parts") skip reranking
+and put the whole best-matching document in the prompt, since a top-5 sample
+would produce a wrong total. Spreadsheet row counts are computed in code and
+handed to the model rather than left to it.
+
+The browser renders the two parts as separate blocks, turns `[n]` into
+buttons, and opens PDFs in a pdf.js viewer that highlights the cited passage
+by matching each text run on the page against the stored chunk.
 
 ---
 
-## Why it's built this way (the short version)
+## Flow 3: `diagram:` requests
 
-- **Isolation is physical, not a checkbox** — separate storage per user/project,
-  so there's no code path that could leak one person's documents into another's answer.
-- **Two search methods, not one** — catches both "the exact term" and "the same
-  idea worded differently."
-- **Facts vs. insight, always separated** — so you can tell what's actually in
-  your documents vs. what the AI is adding.
-- **Reuses real diagrams instead of inventing new ones** whenever possible.
-- **Memory is curated, not a dumping ground** — it only keeps what's actually
-  worth remembering, so it stays useful even after hundreds of questions.
-- **Everything runs locally** — no document ever leaves your machine.
+```
+ "diagram: PC-42 block diagram"
+   │
+   ▼
+ A figure in this scope whose caption shares ≥ 2 real words with the request?
+   │
+  yes ──► return that image, with a link to its page
+   │
+  no  ──► retrieve passages, ask the model for Mermaid, render it in the browser
+```
+
+A real figure from the document always wins over a drawn one. Matching is
+deliberately strict: an unrelated figure is worse than a generated diagram.
+
+---
+
+## Decisions worth knowing before changing things
+
+- **The reranker is a prompted LLM, not a cross-encoder.** That avoids a torch
+  dependency. Its scores are also the grounding signal, so `reranker.py` works
+  hard to keep them on the 0-10 scale; without it, retrieval-only scores are
+  capped below "strong" so an unverified answer never looks certain.
+- **Memory is distilled, not logged.** Raw questions turn the memory block into
+  noise. Memory is context, never evidence: the prompt forbids citing it.
+- **Table values are a separate store,** not more chunks, because spec
+  questions need the exact cell, not a nearby paragraph.
+- **One database.** The earlier version split Chroma, SQLite and files, and
+  every delete had to remember all three. Cascading foreign keys make that
+  impossible to get wrong.
+- **Small model assumed.** Prompts spell out formats with examples, and every
+  parser of model output (scores, memory JSON, Mermaid) tolerates the ways a
+  3B model gets them wrong.
+
+## Known limits
+
+- The full-text index uses PostgreSQL's `simple` configuration: no stemming,
+  English or otherwise.
+- Table flattening is heuristic (two columns = label/value, otherwise header
+  row × first column). Merged cells aren't handled.
+- The example eval set covers three questions on the sample documents. Build
+  one from real documents before tuning retrieval settings.
