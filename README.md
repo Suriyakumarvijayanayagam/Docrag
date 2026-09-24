@@ -1,192 +1,190 @@
-# DocRAG — Local Multi-Tenant Document Intelligence
+# Datum
 
-A standalone, self-hosted system: upload PDFs/DOCX, ask technical questions,
-get answers with document-grounded facts separated from AI-added insight,
-generate diagrams from document content, and never lose project context —
-all running on a small local model (Qwen3.5-2B class), fully isolated per
-user/project.
+Ask technical questions of your datasheets, specs and design documents, and
+get answers that point to the page they came from. Everything runs on your
+own machine: a small local model through Ollama, PostgreSQL with pgvector, and
+your files in a Docker volume. Nothing is sent to a cloud service.
 
-**→ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the stack and flow
-diagrams — written to be understandable by anyone, not just engineers.**
+Built for welding and fabrication engineers, inspectors and welders working
+to IS, ASME, AWS and ISO codes, reviewing WPS/PQRs, standards, consumable
+datasheets and design documents. It is not a general chatbot over files.
 
-## Console
+- **Answers tied to pages.** Every claim carries a `[n]` citation. Clicking it
+  opens the PDF beside the answer, scrolled to the page, with the cited passage
+  highlighted.
+- **What the documents say is kept apart from what the model adds.** The
+  model's own reasoning is shown in a separate, labelled block.
+- **Grounding you can see.** Each answer reports strong, partial or weak
+  grounding, based on how relevant the reranker judged the best passage.
+- **Exact spec values.** Tables in PDFs, Word and PowerPoint files are
+  extracted as label/value pairs, so "what's the max input voltage" returns the
+  number from the table instead of a paraphrase.
+- **Figures.** Start a question with `diagram:` to get a figure that already
+  exists in the documents, or a Mermaid diagram drawn by the model if none matches.
+- **Job files with cross-document checks.** Put a job's WPS, PQR, welder
+  qualifications, consumable certificates and weld log together, and Datum
+  reads the key fields from each and checks them against each other: a WPS
+  thickness range beyond its PQR coupon, a certificate for the wrong electrode,
+  a welder on a joint they aren't qualified for (process, position), a
+  qualification lapsed through inactivity, a joint thicker than its WPS allows.
+  Every finding cites the page or log row on both sides, every extracted field
+  can be corrected by hand, and the findings print as an inspection-readiness
+  report. The checks are code, not the model.
+- **Reference libraries.** Standards, codes and consumable catalogues loaded
+  once by the server operator, readable by every account, and searched
+  alongside each team's own documents (switchable per thread).
+- **Welding calculators.** Arc energy / heat input, carbon equivalent (IIW CE,
+  CET, Pcm) and an EN 1011-2 preheat estimate, computed in code with the
+  formula, reference and validity range shown. The model is told not to do
+  this arithmetic itself.
+- **Project memory.** Facts and decisions from earlier questions in a library
+  are distilled and given to the model as context in later threads.
+- **Accounts and shared libraries.** Local sign-in; a library's owner can
+  invite other accounts on the same server.
 
-A split-view console (Next.js 16 + React 19 + TypeScript + Tailwind 4) lives in
-`frontend-next/` and is served at `http://localhost:8000/ui`. It builds to a
-**static export**, so runtime is still a single process — FastAPI serves the
-built files; there is no Node server in production.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it works.
+
+## Run it (macOS)
+
+1. Install [Ollama](https://ollama.com/download) and pull the models. Ollama
+   runs natively so it can use the GPU; the rest runs in Docker.
+
+   ```bash
+   ollama serve
+   ollama pull qwen2.5:3b
+   ollama pull nomic-embed-text
+   ```
+
+2. Configure and start:
+
+   ```bash
+   cp .env.example .env
+   docker compose up --build
+   ```
+
+3. Open http://localhost:3000, create an account, create a library and add
+   documents. Indexing runs in the background; a document is used for answers
+   once it shows **Ready**.
+
+`JWT_SECRET` can stay blank: a random secret is generated on first start and
+kept in the uploads volume. The 3B model is a practical default for an 8 GB
+Mac; set `CHAT_MODEL` to use a larger one. If you change the embedding model,
+set `EMBEDDING_DIM` to match and start with a fresh database volume.
 
 ```bash
-cd frontend-next
+docker compose logs -f api worker   # follow indexing and answers
+docker compose down                 # stop
+docker compose down -v              # stop and delete ALL data, files and embeddings
+```
+
+API docs are served at http://localhost:3000/api/docs.
+
+## Job files
+
+**Jobs → New job**, then upload the job's documents. Each file's type (WPS,
+PQR, welder qualification, consumable certificate, weld log) is guessed from
+its name and first page; change it if it's wrong. Open a document to see the
+fields read from it, where each came from, and correct any value. **Run
+checks** lists findings by severity; click any evidence line to open that page
+with the value highlighted. **Report** prints the findings.
+
+Weld logs are spreadsheets (XLSX or CSV) with at least welder and WPS columns;
+joint, date, position, process and thickness columns are used when present.
+`sample-docs/job-2025-118/` is a fictional job with seven planted problems for
+trying it out.
+
+## Reference libraries
+
+Load documents everyone on the server should be able to search (standards,
+codes, electrode and wire catalogues) into a read-only reference library:
+
+```bash
+docker compose cp ./standards api:/tmp/standards
+docker compose exec api python -m scripts.load_reference \
+    --name "Welding reference" --description "Codes, standards and consumable data" /tmp/standards
+docker compose exec api python -m scripts.load_reference --list
+docker compose exec api python -m scripts.load_reference --name "Welding reference" --remove
+```
+
+Re-running a load adds new files and skips ones already there. BIS, ASME,
+AWS and ISO documents are licensed: only load copies your organisation may
+share with everyone who has an account. `sample-docs/Sample_WPS-SMAW-017.docx`
+is a fictional WPS for trying this out.
+
+## Supported files
+
+PDF (with OCR for image-only pages), DOCX, PPTX, XLSX, Markdown, plain text,
+HTML, and PNG/JPEG/TIFF/BMP images (OCR), up to 50 MB each. Files can go into a
+library, or be attached to a single thread.
+
+## Development
+
+Backend (Python 3.10+; the Docker image uses 3.12). Needs PostgreSQL with
+pgvector and Ollama; the defaults point at `localhost`.
+
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+uvicorn app.main:app --reload --port 8000   # API
+python -m app.worker                        # indexing worker, second terminal
+python -m pytest                            # unit tests
+```
+
+Frontend (Vite, React 18, TypeScript). The dev server proxies `/api` to
+`localhost:8000`.
+
+```bash
+cd frontend
 npm install
-cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/   # PDF viewer worker
-npm run build                                                 # writes ./out, served at /ui
+npm run dev
 ```
 
-The pdf.js worker is served from your own origin rather than a CDN, so the
-viewer works offline like the rest of the stack.
+### Without a model
 
-- **Sidebar** — Home, Ask documents, Library and Project memory, each a real
-  route (`/ui/`, `/ui/chat/`, `/ui/library/`, `/ui/memory/`) so refreshing or
-  bookmarking keeps the page you were on. Shared state lives in a provider in
-  the root layout, so moving between routes never drops the conversation or
-  refetches. Also holds the light / dark / match-system theme switcher, a
-  collapse toggle, and the current workspace at the bottom. There is no
-  sign-in: a workspace is just a user + project name, and switching it swaps to
-  a completely separate set of documents and memory.
-- **Home** — what the system is and what it can do, a composer to start from,
-  quick-start prompts, and a live summary of what's loaded.
-- **Ask documents** — the split view. The left pane renders the actual PDF;
-  clicking a citation scrolls the viewer to that page and **highlights the
-  exact passage the answer was drawn from**, so a reviewer checks the claim
-  against the source instead of taking it on trust. Every answer is split into
-  **from the documents** and **added by the model**, with a plain-English
-  confidence reading and per-answer latency plus time-to-first-token.
-- **Library** — every document with its passage / spec-value / figure counts,
-  drag-and-drop upload, and removal (which clears passages, spec values and
-  figures together).
-- **Project memory** — the distilled facts and decisions carried across
-  sessions.
-- **Keyboard-first** — `⌘K` command palette, `/` to focus the composer, `⌘↵` to
-  send from anywhere, `diagram: …` to request a figure.
-- **Diagrams** render with a **bundled** Mermaid — no CDN, so they work offline
-  and on firewalled networks.
-- Light by default — a PDF page is white — with a dark theme via the command palette.
-
-The original single-file UI is still there, needs no build step, and is served
-at `http://localhost:8000/ui-basic`. If `frontend-next/out` doesn't exist on a
-machine, `/ui` falls back to it automatically.
-
-## Architecture
-
-```
-Client
-  │
-  ▼
-FastAPI (app layer)
-  ├── /documents/upload   → parse → chunk → embed → store (Chroma)
-  ├── /ask                → embed query → retrieve → rerank → answer
-  ├── /diagram            → retrieve context → generate Mermaid syntax
-  └── /projects/*         → status, persistent memory inspection
-  │
-  ▼
-Ollama (model layer, runs separately)
-  ├── LLM: qwen2.5:3b (swap to qwen3.5:2b once available in your Ollama build)
-  └── Embeddings: nomic-embed-text
-  │
-  ▼
-Storage
-  ├── ChromaDB — one physical collection per (user_id, project_id) — hard isolation
-  ├── SQLite — persistent project memory (facts/decisions, not raw chat logs)
-  └── Filesystem — uploaded source files
-```
-
-## Why it's built this way
-
-- **Multi-tenant isolation is structural, not a filter.** Each user+project pair
-  gets its own Chroma collection. There's no query path that can cross collections —
-  you can't accidentally leak User B's documents into User A's answer.
-- **Grounded facts vs AI insight are kept visibly separate** in every answer,
-  so a technical reviewer can tell what came from their documents vs what the
-  model added.
-- **Diagrams are generated as Mermaid text**, not images — small models are
-  competent at structured text generation, bad at actually drawing.
-- **Persistent memory is a separate, curated store from RAG.** RAG answers
-  "what does the document say." Memory answers "what do we already know about
-  this project," and survives across sessions without relying on a growing
-  context window.
-- **No heavy ML deps (torch/sentence-transformers).** Embeddings and reranking
-  route through Ollama, keeping the whole stack installable in seconds and the
-  model swap-in swap-out (change one line in `config.py`).
-
-## Setup
+`backend/tests/fake_ollama.py` stands in for Ollama with deterministic
+responses, so upload, indexing, retrieval, reranking, answers and memory can
+all be exercised without downloading a model. It checks that data flows end to
+end, not that answers are any good.
 
 ```bash
-# 1. Install Ollama, then pull the models
-ollama pull qwen2.5:3b        # or your chosen small model
-ollama pull nomic-embed-text
-
-# 2. Install app deps
-pip install -r requirements.txt
-
-# 3. Run
-uvicorn app.main:app --reload
+docker compose -f compose.yaml -f compose.fake-llm.yaml up --build
 ```
 
-Visit `http://localhost:8000/docs` for interactive API docs.
+### Retrieval evaluation
 
-## API surface
-
-| Endpoint | Purpose |
-|---|---|
-| `POST /documents/upload` | Upload a PDF/DOCX — parses, chunks, embeds, extracts tables + figures |
-| `GET /documents/list` | Documents in this tenant, with chunk/fact/figure counts |
-| `DELETE /documents/{doc_id}` | Remove a document — chunks, structured facts, and figures |
-| `GET /documents/{doc_id}/file` | The original uploaded file, for the viewer |
-| `POST /ask` | Ask a question, grounded in that project's documents, blocking |
-| `POST /ask/stream` | Same as `/ask` but streams tokens as they generate |
-| `POST /diagram` | Returns an existing figure from the docs if one matches, else generates Mermaid |
-| `GET /projects/status` | Document count + memory entry count |
-| `GET /projects/memory` | Inspect the distilled persistent memory entries |
-
-## Upgrades over the base prototype
-
-1. **Hybrid retrieval** (`app/core/hybrid_search.py`) — vector search (Chroma) fused
-   with BM25 keyword search via Reciprocal Rank Fusion. Catches exact terms
-   (part numbers, model names) that pure embedding similarity can miss.
-2. **Cross-document reasoning** (`query_pipeline._ensure_doc_diversity`) — comparison-style
-   questions ("compare X vs Y") are detected and retrieval is rebalanced so multiple
-   source documents are represented, not just whichever one scored highest.
-3. **Structured fact extraction** (`app/core/structured_facts.py`) — tables from PDF/DOCX
-   are pulled into an exact-lookup key/value store at ingest time. Spec questions
-   ("what's the max voltage") get a precise answer, not a semantic guess.
-4. **Existing figure extraction** (`app/core/figures.py`) — diagrams/schematics already
-   embedded in the source documents are extracted, captioned, and returned directly
-   when relevant — `/diagram` only generates a new Mermaid diagram if nothing matches.
-5. **Confidence scoring** (`query_pipeline._confidence_label`) — every answer reports
-   high/medium/low/none confidence based on the reranker's actual relevance scores,
-   so a technical reviewer can see when the system is unsure instead of it silently
-   guessing.
-6. **Streaming responses** (`llm_client.chat_stream`, `/ask/stream`) — tokens stream
-   as they're generated instead of blocking for the full response.
-7. **LLM-distilled memory** (`app/core/memory_distill.py`) — instead of logging every
-   raw question, each exchange is distilled by the LLM into a durable fact/decision/
-   preference, or discarded if it wasn't worth remembering. Keeps the memory block
-   dense over a long project instead of accumulating noise.
-8. **Retrieval evaluation harness** (`scripts/eval_retrieval.py`) — run against a
-   known question set to measure hit rate, and specifically shows where hybrid
-   fusion rescues a miss that vector-only or BM25-only would have had. Proves
-   retrieval quality with numbers instead of demo vibes.
+Measure hit rates on known question/answer-location pairs, both after fusion
+and after reranking:
 
 ```bash
-python -m scripts.eval_retrieval --user_id demo --project_id demo \
-    --eval_file scripts/eval_set_example.json
+docker compose exec api python -m scripts.eval_retrieval \
+    --knowledge_base_id <library id> --eval_file scripts/eval_set_example.json
 ```
 
-## What's tested vs what needs Ollama running
+The example set targets the documents in `sample-docs/`
+(regenerate them with `cd backend && python -m scripts.make_sample_docs`).
+Build a set from your own documents before trusting the numbers.
 
-Verified in this environment (no live model needed):
-- PDF/DOCX parsing (including tables)
-- Recursive chunking with overlap
-- Multi-tenant Chroma isolation (confirmed User A/User B never cross-contaminate)
-- Full FastAPI route registration
+## Configuration
 
-Needs Ollama running locally to test end-to-end:
-- Embedding generation
-- Answer generation (grounded + insight split)
-- LLM-prompted reranking
-- Mermaid diagram generation
+| Variable | Default | |
+|---|---|---|
+| `CHAT_MODEL` | `qwen2.5:3b` | Ollama model for answers, reranking, memory and diagrams |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIM` | `nomic-embed-text` / `768` | Must match each other |
+| `CHUNK_TOKENS` / `CHUNK_OVERLAP` | `420` / `60` | Passage size, in an estimated token count |
+| `RETRIEVAL_MIN_SIMILARITY` | `0.28` | Vector matches below this are dropped |
+| `RETRIEVAL_CANDIDATES` / `RETRIEVAL_TOP_K` | `12` / `5` | Fused candidates reranked, and passages kept |
+| `RERANK_ENABLED` | `true` | `false` is faster, but grounding then never reads "strong" |
+| `MEMORY_ENABLED` | `true` | Distil questions into library memory |
+| `EXTRACTION_MODEL_FALLBACK` | `true` | Let the model propose job fields the table/text rules missed (kept only if found verbatim) |
+| `DOMAIN_CONTEXT` | welding text | Who answers are for; added to the prompt. Empty string for a general document tool |
+| `REGISTRATION_ENABLED` | `true` | Turn off once everyone has an account |
 
-## Known trade-offs to revisit as you scale
+## Limits
 
-- **Reranker** currently uses LLM-prompted scoring instead of a dedicated
-  cross-encoder (to avoid a torch dependency). Swap in `bge-reranker-base`
-  in `app/core/reranker.py` if answer quality needs it — interface won't change.
-- **BM25 index is rebuilt on every query** from the tenant's full collection.
-  Fine at prototype scale; cache it (or move to a proper hybrid store like
-  Weaviate/Qdrant with native BM25) once a single project has thousands of chunks.
-- **Structured fact extraction** uses simple table-shape heuristics (2-column =
-  label/value, else header-row + row-entity flattening). Works well for typical
-  spec sheets; complex nested/merged-cell tables will need custom handling.
-- **No auth layer yet** — `user_id` is passed by the client. Fine for a
-  prototype/demo, not for anything public-facing.
+- Small local models make mistakes. Check citations, especially when
+  grounding reads partial or weak. Nothing here replaces a qualified WPS or
+  the governing code; calculator results are estimates to check against them.
+- Table extraction handles typical spec tables; merged-cell and nested tables
+  are not reliably flattened. Non-English documents are untested.
+- Keep it bound to localhost (the default) unless you put it behind TLS.

@@ -1,0 +1,3 @@
+Project Maple launch readiness
+
+The release owner for Project Maple is Mina Rao. The launch threshold is 92% support readiness. The rollout is scheduled for October 14.

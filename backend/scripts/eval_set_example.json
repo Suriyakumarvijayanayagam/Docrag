@@ -1,0 +1,27 @@
+[
+  {
+    "question": "At what temperature does the PC-42 thermal shutdown trip?",
+    "expected_keyword": "150",
+    "expected_source_file": "PC-42_datasheet.pdf"
+  },
+  {
+    "question": "How much switching ripple does the VE-9 put on the output rail?",
+    "expected_keyword": "35 mV",
+    "expected_source_file": "VE-9_datasheet.pdf"
+  },
+  {
+    "question": "What is the maximum output ripple allowed on the Orion logic rail?",
+    "expected_keyword": "20 mV",
+    "expected_source_file": "Orion_requirements.docx"
+  },
+  {
+    "question": "What is the maximum interpass temperature allowed by WPS-SMAW-017?",
+    "expected_keyword": "250",
+    "expected_source_file": "Sample_WPS-SMAW-017.docx"
+  },
+  {
+    "question": "Which electrode classification does WPS-SMAW-017 use and how must it be baked?",
+    "expected_keyword": "E7018",
+    "expected_source_file": "Sample_WPS-SMAW-017.docx"
+  }
+]
