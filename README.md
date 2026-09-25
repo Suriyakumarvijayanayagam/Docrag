@@ -35,8 +35,9 @@ datasheets and design documents. It is not a general chatbot over files.
   alongside each team's own documents (switchable per thread).
 - **Welding calculators.** Arc energy / heat input, carbon equivalent (IIW CE,
   CET, Pcm) and an EN 1011-2 preheat estimate, computed in code with the
-  formula, reference and validity range shown. The model is told not to do
-  this arithmetic itself.
+  formula, reference and validity range shown. Ask "what's the heat input
+  for 24 V, 160 A at 150 mm/min with SMAW?" in a thread and the calculator
+  answers, not the model; missing inputs are named rather than guessed.
 - **Project memory.** Facts and decisions from earlier questions in a library
   are distilled and given to the model as context in later threads.
 - **Accounts and shared libraries.** Local sign-in; a library's owner can
@@ -139,6 +140,31 @@ cd frontend
 npm install
 npm run dev
 ```
+
+### End-to-end tests
+
+`backend/tests/e2e/run.py` drives a throwaway stack through the API: accounts
+and access control, uploads and indexing, answers and citations, figures,
+memory, reference libraries, calculators and job checks. It uses Python's
+standard library only and creates its own named test accounts, so never
+point it at a stack whose data you care about.
+
+```bash
+APP_PORT=3107 docker compose -p datum-e2e -f compose.yaml -f compose.fake-llm.yaml up --build -d
+python3 backend/tests/e2e/run.py core welding jobs     # 58 checks, stand-in model
+APP_PORT=3107 docker compose -p datum-e2e -f compose.yaml up -d --remove-orphans
+python3 backend/tests/e2e/run.py real                  # answer quality on the real model
+docker compose -p datum-e2e down -v
+```
+
+`real` checks that answers state the right values from the right document,
+cite them, keep the two-part layout, say so when the documents don't cover a
+question, and hand calculations to the calculator. On an M1 with 8 GB and
+`qwen2.5:3b`, answers take 5-20 s. Keep the Mac awake while it runs
+(`caffeinate -dimsu python3 ...`): idle sleep pauses Docker and Ollama.
+
+`docs/demo/record_demo.py` records a captioned walkthrough video of the app
+with Playwright (see its docstring).
 
 ### Without a model
 

@@ -39,6 +39,15 @@ nothing useful to add.
 Never blend the two parts. Use the project memory to stay consistent with earlier findings, but \
 do not repeat it back unless it is relevant, and never cite it."""
 
+# Repeated after the excerpts: a small model follows what it read last, and
+# with the layout only at the top it drops the headings (seen with qwen2.5:3b).
+LAYOUT_REMINDER = (
+    "Now answer the user's question. Start with the heading FROM THE DOCUMENTS: and answer in your own "
+    "complete sentences, citing sources like [1]; do not copy the excerpt headers or paste excerpts. If the "
+    "excerpts don't answer it, say which information is missing. Then write the heading ADDITIONAL INSIGHT: "
+    "followed by your own analysis, or None."
+)
+
 _EXHAUSTIVE_COMPLETE = (
     "The complete retrieved document is included. For a request to count or list records, use the "
     "complete evidence, include every requested record, and do not infer totals from the largest "
@@ -120,7 +129,7 @@ def build_sources(passages: list[dict], facts: list[dict]) -> list[dict]:
             "section": fact["locator"],
             "location": fact["locator"],
             "snippet": text,
-            "content": f"Exact table value - {text}",
+            "content": f"(value read from a table) {text}",
             "score": None,
             "exact": True,
         })
@@ -169,7 +178,7 @@ def prepare(query: str, knowledge_base_id: str | None, chat_id: str, history: li
     domain = f"{settings.domain_context}\n\n" if settings.domain_context else ""
     system = (
         f"{ANSWER_SYSTEM}\n\n{domain}{render_block(knowledge_base_id)}\n{guidance}\n"
-        f"DOCUMENT EXCERPTS AND FACTS:\n{evidence}"
+        f"DOCUMENT EXCERPTS AND FACTS:\n{evidence}\n\n{LAYOUT_REMINDER}"
     )
     messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": query}]
     num_ctx = 4096

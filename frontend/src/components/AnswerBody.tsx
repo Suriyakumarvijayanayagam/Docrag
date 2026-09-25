@@ -15,7 +15,10 @@ const INSIGHT_HEADING = /^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*|__)?[ \t]*(?:\d\.[ \t]*
  */
 export function splitAnswer(text: string): { grounded: string; insight: string } {
   const match = INSIGHT_HEADING.exec(text)
-  const grounded = (match ? text.slice(0, match.index) : text).replace(GROUNDED_HEADING, '').trim()
+  let grounded = (match ? text.slice(0, match.index) : text).replace(GROUNDED_HEADING, '').trim()
+  // a small model sometimes drops the headings but still writes the insight's
+  // "None." on its own last line; that's an empty insight, not part of the answer
+  if (!match) grounded = grounded.replace(/\n\s*none\.?\s*$/i, '').trim()
   let insight = match ? text.slice(match.index + match[0].length).trim() : ''
   if (/^none\.?$/i.test(insight)) insight = ''
   return { grounded, insight }
