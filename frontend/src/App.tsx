@@ -26,6 +26,11 @@ const PdfViewer = lazy(() => import('./components/PdfViewer').then(module => ({ 
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 const isPdf = (filename: string) => filename.toLowerCase().endsWith('.pdf')
+// crypto.randomUUID only exists on secure origins (HTTPS or localhost); a
+// teammate opening http://<server-ip>:3000 on the office network has neither
+const newId = () => typeof crypto !== 'undefined' && 'randomUUID' in crypto
+  ? crypto.randomUUID()
+  : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 
 function LibraryOptions({ libraries }: { libraries: KnowledgeBase[] }) {
   const own = libraries.filter(kb => !kb.is_reference)
@@ -359,8 +364,8 @@ function Workspace({ user, onSignOut }: { user: User; onSignOut: () => void }) {
     if (!content || sending) return
     const chat = await ensureChat()
     if (!chat) return
-    const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content, citations: [], created_at: new Date().toISOString() }
-    const pendingId = crypto.randomUUID()
+    const userMessage: Message = { id: newId(), role: 'user', content, citations: [], created_at: new Date().toISOString() }
+    const pendingId = newId()
     setMessages(current => [...current, userMessage, { id: pendingId, role: 'assistant', content: '', citations: [], created_at: new Date().toISOString() }])
     setInput('')
     setSending(true)

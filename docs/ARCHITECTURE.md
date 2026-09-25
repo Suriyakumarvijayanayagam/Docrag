@@ -123,6 +123,13 @@ are re-indexed on the next start.
    └─► After the answer: distil it into one memory entry, or nothing
 ```
 
+Calculation questions with their inputs ("heat input for 24 V, 160 A at 150
+mm/min, SMAW") never reach the model: `calc_intent.py` parses them and
+answers with `welding.py`. If the model returns an empty answer ("None."),
+it is replaced with a plain statement that the documents don't cover the
+question. Answers are generated at temperature 0 so the same question gives
+the same answer.
+
 Count and list questions ("how many rows", "list all parts") skip reranking
 and put the whole best-matching document in the prompt, since a top-5 sample
 would produce a wrong total. Spreadsheet row counts are computed in code and

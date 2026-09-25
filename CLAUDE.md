@@ -43,7 +43,15 @@ the old code is in git history before the merge commit.
 cp .env.example .env && docker compose up --build   # http://localhost:3000
 docker compose -f compose.yaml -f compose.fake-llm.yaml up --build   # no model needed
 cd backend && python -m pytest                      # unit tests (needs 3.10+)
+python3 backend/tests/e2e/run.py core welding jobs  # end-to-end, against a throwaway stack
 ```
+
+End-to-end suites live in `backend/tests/e2e/` (stdlib only, run on the host)
+and must only target a throwaway stack (`-p datum-e2e`, port 3107): they
+create the named test accounts suriya@tenext.in / qa.reviewer@tenext.in.
+Never keep test scripts in /tmp: the Mac was restarted mid-work once and
+they were lost. Run long real-model tests under `caffeinate`: idle sleep
+paused one run for 30 minutes and looked like a slow model.
 
 The host's system Python is 3.9, which can't run the backend. Run tests in
 the image: `docker run --rm -v "$PWD":/src -w /src -u root <api image> sh -c
@@ -95,6 +103,15 @@ the image: `docker run --rm -v "$PWD":/src -w /src -u root <api image> sh -c
     need no code knowledge - prefer adding those.
 15. **Bump `job_fields.EXTRACTOR_VERSION`** when extraction output changes, so
     cached job extractions are re-read.
+16. **Tuned for qwen2.5:3b, verified against it** (`e2e/run.py real`):
+    answers at temperature 0; the layout is repeated after the excerpts
+    (`answer.LAYOUT_REMINDER`) because the model follows what it read last;
+    more instructions at the end made refusals worse, so domain rules that
+    must hold are enforced in code instead (`calc_intent.py`, the empty-answer
+    replacement in `streaming.py`). Re-run `real` after any prompt change.
+17. **The app is used over plain HTTP on a LAN**, which is not a secure
+    context: no `crypto.randomUUID`, clipboard or other secure-only browser
+    APIs without a fallback. Test the UI from a non-localhost address.
 
 ## Conventions
 
@@ -118,13 +135,14 @@ code requirements from memory in prompts or UI copy.
 
 ## Known gaps
 
-- Answer quality has only been checked against the fake model; run the eval
-  set against `qwen2.5:3b` with real documents.
+- Answer quality is checked on the fictional samples with `qwen2.5:3b`
+  (26/26 in `e2e/run.py real`), not yet on real customer documents.
 - Full-text search has no stemming (`simple` config).
 - No per-member roles beyond owner/member; no audit log.
 - Planned welding work not yet built: shop-floor QR logging of actual weld
   parameters into the job, a qualification-range engine driven by reviewed
-  rule tables, calculator results usable inside answers, change-password UI,
+  rule tables, CE/preheat questions answered in-thread (heat input is),
+  change-password UI,
   and an eval set from real welding documents.
 - Job field extraction is tuned on the fictional samples; real WPS/PQR forms
   vary a lot and will need more label synonyms.

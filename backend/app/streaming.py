@@ -12,7 +12,7 @@ import re
 
 from psycopg.types.json import Jsonb
 
-from app import llm, memory
+from app import calc_intent, llm, memory
 from app.answer import build_sources, prepare, public_sources
 from app.db import connection
 from app.figures import best_figure, generate_mermaid
@@ -22,6 +22,18 @@ logger = logging.getLogger("datum.api")
 
 _DIAGRAM_PREFIX = re.compile(r"^\s*/?diagram\s*[:\-]?\s+", re.I)
 MODEL_UNAVAILABLE = "Could not reach Ollama. Confirm it is running and the selected model is installed."
+
+
+NOT_IN_DOCUMENTS = (
+    "FROM THE DOCUMENTS:\nThe selected documents don't state this. The closest passages found are listed "
+    "under Sources, in case the answer is worded differently there.\n\nADDITIONAL INSIGHT:\nNone."
+)
+
+
+def _says_nothing(answer: str) -> bool:
+    """True when, without its headings and "None.", the answer has no content."""
+    body = re.sub(r"(?i)from the documents:?|additional insights?:?|\bnone\b\.?|[#*_:\s]", "", answer)
+    return len(body) < 5
 
 
 def sse(name: str, data: dict) -> str:
@@ -56,6 +68,13 @@ def _save_assistant(chat_id, content: str, sources: list[dict], confidence: str 
 
 def answer_stream(chat: dict, query: str, history: list[dict]):
     knowledge_base_id, chat_id, use_reference = _scope(chat)
+    calculated = calc_intent.answer(query)
+    if calculated:
+        # a calculation has one right answer; the model never sees it
+        yield sse("sources", {"sources": [], "confidence": None})
+        yield sse("delta", {"text": calculated})
+        yield sse("done", {"message": _save_assistant(chat["id"], calculated, [], None, None)})
+        return
     try:
         prepared = prepare(query, knowledge_base_id, chat_id, history, use_reference)
     except Exception:
@@ -67,7 +86,7 @@ def answer_stream(chat: dict, query: str, history: list[dict]):
 
     parts: list[str] = []
     try:
-        for text in llm.chat_stream(prepared.messages, num_ctx=prepared.num_ctx):
+        for text in llm.chat_stream(prepared.messages, temperature=0.0, num_ctx=prepared.num_ctx):
             parts.append(text)
             yield sse("delta", {"text": text})
     except Exception:
@@ -78,6 +97,9 @@ def answer_stream(chat: dict, query: str, history: list[dict]):
     if not answer:
         answer = "I couldn't generate an answer. Check that Ollama is running and the configured chat model is installed."
         yield sse("delta", {"text": answer})
+    elif _says_nothing(answer):
+        # small models answer an unanswerable question with a bare "None."; say it plainly instead
+        answer = NOT_IN_DOCUMENTS
     message = _save_assistant(chat["id"], answer, sources, prepared.confidence, None)
     yield sse("done", {"message": message})
     # Count/list dumps and evidence-free answers teach the project nothing durable.
